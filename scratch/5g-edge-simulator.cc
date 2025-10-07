@@ -318,25 +318,50 @@ main(int argc, char* argv[])
     gridScenario.CreateScenario();
 
     /*
-     * Create two different NodeContainer for the different traffic type.
-     * In ueLowLat we will put the UEs that will receive low-latency traffic,
-     * while in ueVoice we will put the UEs that will receive the voice traffic.
+     * Create NodeContainers for different application types based on config.
+     * UEs will be assigned to different containers based on their indices in the config file.
      */
-    NodeContainer ueLowLatContainer;
-    NodeContainer ueVoiceContainer;
+    NodeContainer ueTranscodingContainer;
+    NodeContainer ueVideoDetectionContainer;
+    NodeContainer ueVideoSRContainer;
+    NodeContainer ueFileTransferContainer;
+    NodeContainer ueSMECContainer;
+
+    // Helper function to check if UE index is in a vector
+    auto isUEInVector = [](uint32_t ueIndex, const std::vector<uint32_t>& vec) {
+        return std::find(vec.begin(), vec.end(), ueIndex) != vec.end();
+    };
 
     for (uint32_t j = 0; j < gridScenario.GetUserTerminals().GetN(); ++j)
     {
         Ptr<Node> ue = gridScenario.GetUserTerminals().Get(j);
-        if (j % 2 == 0)
-        {
-            ueLowLatContainer.Add(ue);
+        uint32_t ueIndex = j + 1; // Config uses 1-based indexing
+        
+        // Assign UEs to containers based on configuration
+        if (isUEInVector(ueIndex, testbedConfig.smec_ue_indices)) {
+            ueSMECContainer.Add(ue);
         }
-        else
-        {
-            ueVoiceContainer.Add(ue);
+        if (isUEInVector(ueIndex, testbedConfig.transcoding_ue_indices)) {
+            ueTranscodingContainer.Add(ue);
+        }
+        if (isUEInVector(ueIndex, testbedConfig.video_detection_ue_indices)) {
+            ueVideoDetectionContainer.Add(ue);
+        }
+        if (isUEInVector(ueIndex, testbedConfig.video_sr_ue_indices)) {
+            ueVideoSRContainer.Add(ue);
+        }
+        if (isUEInVector(ueIndex, testbedConfig.file_transfer_ue_indices)) {
+            ueFileTransferContainer.Add(ue);
         }
     }
+
+    std::cout << "UE Assignment Summary:" << std::endl;
+    std::cout << "  SMEC UEs: " << ueSMECContainer.GetN() << std::endl;
+    std::cout << "  Transcoding UEs: " << ueTranscodingContainer.GetN() << std::endl;
+    std::cout << "  Detection UEs: " << ueVideoDetectionContainer.GetN() << std::endl;
+    std::cout << "  SR UEs: " << ueVideoSRContainer.GetN() << std::endl;
+    std::cout << "  File Transfer UEs: " << ueFileTransferContainer.GetN() << std::endl;
+    std::cout << "  Total UEs created: " << gridScenario.GetUserTerminals().GetN() << std::endl;
 
     /*
      * TODO: Add a print, or a plot, that shows the scenario.
