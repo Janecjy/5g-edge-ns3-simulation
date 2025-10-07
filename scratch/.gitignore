@@ -5,4 +5,5 @@
 !nested-subdir/
 !subdir/
 !scratch-simulator.cc
+!5g-edge-simulator.cc
 !CMakeLists.txt
