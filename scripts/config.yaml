@@ -1,0 +1,10 @@
+# Configuration file for 5G Edge NS-3 Simulation Setup
+# Update the hostnames and usernames according to your CloudLab nodes
+
+ran:
+  hostname: "c220g5-110920.wisc.cloudlab.us"
+  username: "janechen"
+
+edge:
+  hostname: "c220g5-110921.wisc.cloudlab.us"  # Optional: configure if you have an edge node
+  username: "janechen"
