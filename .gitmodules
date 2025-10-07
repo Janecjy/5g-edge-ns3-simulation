@@ -1,0 +1,3 @@
+[submodule "contrib/nr"]
+	path = contrib/nr
+	url = git@github.com:Janecjy/nr-simulation.git
