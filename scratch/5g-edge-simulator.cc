@@ -173,8 +173,6 @@ main(int argc, char* argv[])
     uint16_t gNbNum = 1;
     uint16_t ueNumPergNb = 2;
     bool logging = false;
-    // Set to false for single-band Band 78 configuration (TDD mode)
-    bool doubleOperationalBand = false;
 
     // Traffic parameters (that we will use inside this script):
     uint32_t udpPacketSizeULL = 100;
@@ -187,17 +185,12 @@ main(int argc, char* argv[])
     Time simTime = MilliSeconds(1000);
     Time udpAppStartTime = MilliSeconds(400);
 
-    // NR parameters (Reference: 3GPP TR 38.901 V17.0.0 (Release 17)
-    // Table 7.8-1 for the power and BW).
-    // In this example the BW has been split into two BWPs
-    // We will take the input from the command line, and then we
-    // will pass them inside the NR module.
-    uint16_t numerologyBwp1 = 4;
-    double centralFrequencyBand1 = 28e9;
-    double bandwidthBand1 = 50e6;
-    uint16_t numerologyBwp2 = 2;
-    double centralFrequencyBand2 = 28.2e9;
-    double bandwidthBand2 = 50e6;
+    // NR parameters configured for Band 78 (3.5 GHz) testbed
+    // TDD mode with 80MHz bandwidth and 2x2 MIMO configuration
+    // Reference: 3GPP TS 38.104 for Band 78 specifications
+    uint16_t numerologyBwp1 = 1;  // Numerology 1 (30 kHz SCS) typical for Band 78
+    double centralFrequencyBand1 = 3.5e9;  // Band 78 center frequency (3.3-3.8 GHz range)
+    double bandwidthBand1 = 80e6;  // 80MHz bandwidth as per testbed
     double totalTxPower = 35;
 
     // TDD Pattern for Band 78 configuration
@@ -221,10 +214,6 @@ main(int argc, char* argv[])
     cmd.AddValue("gNbNum", "The number of gNbs in multiple-ue topology", gNbNum);
     cmd.AddValue("ueNumPergNb", "The number of UE per gNb in multiple-ue topology", ueNumPergNb);
     cmd.AddValue("logging", "Enable logging", logging);
-    cmd.AddValue("doubleOperationalBand",
-                 "If true, simulate two operational bands with one CC for each band,"
-                 "and each CC will have 1 BWP that spans the entire CC.",
-                 doubleOperationalBand);
     cmd.AddValue("packetSizeUll",
                  "packet size in bytes to be used by ultra low latency traffic",
                  udpPacketSizeULL);
@@ -238,16 +227,10 @@ main(int argc, char* argv[])
                  "Number of UDP packets in one second for best effort traffic",
                  lambdaBe);
     cmd.AddValue("simTime", "Simulation time", simTime);
-    cmd.AddValue("numerologyBwp1", "The numerology to be used in bandwidth part 1", numerologyBwp1);
     cmd.AddValue("centralFrequencyBand1",
-                 "The system frequency to be used in band 1",
+                 "The system frequency to be used in Band 78",
                  centralFrequencyBand1);
-    cmd.AddValue("bandwidthBand1", "The system bandwidth to be used in band 1", bandwidthBand1);
-    cmd.AddValue("numerologyBwp2", "The numerology to be used in bandwidth part 2", numerologyBwp2);
-    cmd.AddValue("centralFrequencyBand2",
-                 "The system frequency to be used in band 2",
-                 centralFrequencyBand2);
-    cmd.AddValue("bandwidthBand2", "The system bandwidth to be used in band 2", bandwidthBand2);
+    cmd.AddValue("bandwidthBand1", "The system bandwidth to be used in Band 78", bandwidthBand1);
     cmd.AddValue("totalTxPower",
                  "total tx power that will be proportionally assigned to"
                  " bands, CCs and bandwidth parts depending on each BWP bandwidth ",
@@ -276,7 +259,6 @@ main(int argc, char* argv[])
      * If you need to add other checks, here is the best position to put them.
      */
     NS_ABORT_IF(centralFrequencyBand1 < 0.5e9 && centralFrequencyBand1 > 100e9);
-    NS_ABORT_IF(centralFrequencyBand2 < 0.5e9 && centralFrequencyBand2 > 100e9);
 
     /*
      * If the logging variable is set to true, enable the log of some components
@@ -396,15 +378,15 @@ main(int argc, char* argv[])
     nrHelper->SetEpcHelper(nrEpcHelper);
 
     /*
-     * Spectrum division. We create two operational bands, each of them containing
-     * one component carrier, and each CC containing a single bandwidth part
+     * Spectrum division. We create one operational band for Band 78 (3.5 GHz) containing
+     * one component carrier, and the CC containing a single bandwidth part
      * centered at the frequency specified by the input parameters.
-     * Each spectrum part length is, as well, specified by the input parameters.
-     * Both operational bands will use the StreetCanyon channel modeling.
+     * The spectrum part length is specified by the input parameters.
+     * The band will use the UMa channel modeling for sub-6 GHz frequencies.
      */
     BandwidthPartInfoPtrVector allBwps;
     CcBwpCreator ccBwpCreator;
-    const uint8_t numCcPerBand = 1; // in this example, both bands have a single CC
+    const uint8_t numCcPerBand = 1; // Single CC for Band 78
 
     // Create the configuration for the CcBwpHelper. SimpleOperationBandConf creates
     // a single BWP per CC
@@ -414,11 +396,6 @@ main(int argc, char* argv[])
 
     // Create the band and install the channel into it
     OperationBandInfo band1 = ccBwpCreator.CreateOperationBandContiguousCc(bandConf1);
-    // Set the channel for the band
-    CcBwpCreator::SimpleOperationBandConf bandConf2(centralFrequencyBand2,
-                                                    bandwidthBand2,
-                                                    numCcPerBand);
-    OperationBandInfo band2 = ccBwpCreator.CreateOperationBandContiguousCc(bandConf2);
 
     /*
      * The configured spectrum division is:
@@ -439,28 +416,19 @@ main(int argc, char* argv[])
      */
 
     Ptr<NrChannelHelper> channelHelper = CreateObject<NrChannelHelper>();
-    channelHelper->ConfigureFactories("UMi", "Default", "ThreeGpp");
+    // Use "UMa" (Urban Macro) for Band 78 (3.5 GHz) representation
+    // Band 78 is typically used in macro cell deployments with larger coverage areas
+    channelHelper->ConfigureFactories("UMa", "Default", "ThreeGpp");
     /**
      * Use channelHelper API to define the attributes for the channel model (condition, pathloss and
      * spectrum)
      */
     channelHelper->SetChannelConditionModelAttribute("UpdatePeriod", TimeValue(MilliSeconds(0)));
     channelHelper->SetPathlossAttribute("ShadowingEnabled", BooleanValue(false));
-    /*
-     * if not single band simulation, initialize and setup power in the second band.
-     * Install channel and pathloss, plus other things inside single or both bands.
-     */
-    if (doubleOperationalBand)
-    {
-        channelHelper->AssignChannelsToBands({band1, band2});
-        totalBandwidth += bandwidthBand2;
-        allBwps = CcBwpCreator::GetAllBwps({band1, band2});
-    }
-    else
-    {
-        channelHelper->AssignChannelsToBands({band1});
-        allBwps = CcBwpCreator::GetAllBwps({band1});
-    }
+    
+    // Single band configuration for Band 78
+    channelHelper->AssignChannelsToBands({band1});
+    allBwps = CcBwpCreator::GetAllBwps({band1});
 
     /*
      * allBwps contains all the spectrum configuration needed for the nrHelper.
@@ -505,15 +473,11 @@ main(int argc, char* argv[])
     nrHelper->SetGnbAntennaAttribute("AntennaElement",
                                      PointerValue(CreateObject<IsotropicAntennaModel>()));
 
+    // For single band operation, all traffic uses BWP 0
     uint32_t bwpIdForLowLat = 0;
     uint32_t bwpIdForVoice = 0;
-    if (doubleOperationalBand)
-    {
-        bwpIdForVoice = 1;
-        bwpIdForLowLat = 0;
-    }
 
-    // gNb routing between Bearer and bandwidh part
+    // gNb routing between Bearer and bandwidth part
     nrHelper->SetGnbBwpManagerAlgorithmAttribute("NGBR_LOW_LAT_EMBB",
                                                  UintegerValue(bwpIdForLowLat));
     nrHelper->SetGnbBwpManagerAlgorithmAttribute("GBR_CONV_VOICE", UintegerValue(bwpIdForVoice));
@@ -564,16 +528,6 @@ main(int argc, char* argv[])
     // This pattern provides good balance for 5G applications: 7 DL, 2 UL, 1 Special slot per 10ms frame
     nrHelper->GetGnbPhy(gnbNetDev.Get(0), 0)
         ->SetAttribute("Pattern", StringValue(tddPattern));
-
-    if (doubleOperationalBand)
-    {
-        // Get the first netdevice (gnbNetDev.Get (0)) and the second bandwidth part (1)
-        // and set the attribute.
-        nrHelper->GetGnbPhy(gnbNetDev.Get(0), 1)
-            ->SetAttribute("Numerology", UintegerValue(numerologyBwp2));
-        nrHelper->GetGnbPhy(gnbNetDev.Get(0), 1)
-            ->SetTxPower(10 * log10((bandwidthBand2 / totalBandwidth) * x));
-    }
 
     // From here, it is standard NS3. In the future, we will create helpers
     // for this part as well.
