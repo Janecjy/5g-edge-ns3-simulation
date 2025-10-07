@@ -563,8 +563,9 @@ main(int argc, char* argv[])
     // From here, it is standard NS3. In the future, we will create helpers
     // for this part as well.
 
+    // Use 25 GbE to match real testbed network speed between RAN and edge servers
     auto [remoteHost, remoteHostIpv4Address] =
-        nrEpcHelper->SetupRemoteHost("100Gb/s", 2500, Seconds(0.000));
+        nrEpcHelper->SetupRemoteHost("25Gb/s", 2500, Seconds(0.000));
 
     InternetStackHelper internet;
 
