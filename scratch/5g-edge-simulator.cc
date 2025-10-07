@@ -58,10 +58,101 @@ $ ./ns3 run "cttc-nr-demo --PrintHelp"
 #include "ns3/nr-module.h"
 #include "ns3/point-to-point-module.h"
 
+#include <fstream>
+#include <sstream>
+#include <map>
+#include <vector>
+
 /*
  * Use, always, the namespace ns3. All the NR classes are inside such namespace.
  */
 using namespace ns3;
+
+/*
+ * Configuration structure to hold testbed parameters
+ */
+struct TestbedConfig {
+    uint32_t num_ues = 2;
+    std::vector<uint32_t> smec_ue_indices;
+    std::vector<uint32_t> transcoding_ue_indices;
+    std::vector<uint32_t> video_detection_ue_indices;
+    std::vector<uint32_t> video_sr_ue_indices;
+    std::vector<uint32_t> file_transfer_ue_indices;
+    uint32_t max_cpus = 24;
+};
+
+/*
+ * Simple JSON parser for configuration file
+ */
+std::vector<uint32_t> ParseIndices(const std::string& indices_str) {
+    std::vector<uint32_t> indices;
+    if (indices_str.empty()) {
+        return indices;
+    }
+    
+    std::stringstream ss(indices_str);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        if (!item.empty()) {
+            indices.push_back(std::stoi(item));
+        }
+    }
+    return indices;
+}
+
+TestbedConfig LoadConfig(const std::string& configPath) {
+    TestbedConfig config;
+    std::ifstream file(configPath);
+    
+    if (!file.is_open()) {
+        std::cerr << "Warning: Could not open config file: " << configPath << ". Using defaults." << std::endl;
+        return config;
+    }
+    
+    std::string line;
+    std::map<std::string, std::string> configMap;
+    
+    // Simple JSON-like parsing (assumes one key-value per line)
+    while (std::getline(file, line)) {
+        // Remove whitespace and quotes
+        line.erase(std::remove_if(line.begin(), line.end(), ::isspace), line.end());
+        if (line.empty() || line[0] == '{' || line[0] == '}') continue;
+        
+        // Remove trailing comma
+        if (line.back() == ',') line.pop_back();
+        
+        size_t colonPos = line.find(':');
+        if (colonPos != std::string::npos) {
+            std::string key = line.substr(0, colonPos);
+            std::string value = line.substr(colonPos + 1);
+            
+            // Remove quotes
+            key.erase(std::remove(key.begin(), key.end(), '"'), key.end());
+            value.erase(std::remove(value.begin(), value.end(), '"'), value.end());
+            
+            configMap[key] = value;
+        }
+    }
+    
+    // Parse configuration values
+    if (configMap.find("num_ues") != configMap.end()) {
+        config.num_ues = std::stoi(configMap["num_ues"]);
+    }
+    if (configMap.find("max_cpus") != configMap.end()) {
+        config.max_cpus = std::stoi(configMap["max_cpus"]);
+    }
+    
+    // Parse UE indices
+    config.smec_ue_indices = ParseIndices(configMap["smec_ue_indices"]);
+    config.transcoding_ue_indices = ParseIndices(configMap["transcoding_ue_indices"]);
+    config.video_detection_ue_indices = ParseIndices(configMap["video_detection_ue_indices"]);
+    config.video_sr_ue_indices = ParseIndices(configMap["video_sr_ue_indices"]);
+    config.file_transfer_ue_indices = ParseIndices(configMap["file_transfer_ue_indices"]);
+    
+    std::cout << "Loaded config: " << config.num_ues << " UEs, " << config.max_cpus << " max CPUs" << std::endl;
+    
+    return config;
+}
 
 /*
  * With this line, we will be able to see the logs of the file by enabling the
@@ -112,6 +203,9 @@ main(int argc, char* argv[])
     std::string simTag = "default";
     std::string outputDir = "./";
 
+    // Configuration file for testbed setup
+    std::string configFile = "config/baseline_all_tasks.json";
+
     /*
      * From here, we instruct the ns3::CommandLine class of all the input parameters
      * that we may accept as input, as well as their description, and the storage
@@ -157,9 +251,16 @@ main(int argc, char* argv[])
                  "tag to be appended to output filenames to distinguish simulation campaigns",
                  simTag);
     cmd.AddValue("outputDir", "directory where to store simulation results", outputDir);
+    cmd.AddValue("configFile", "path to JSON configuration file for testbed setup", configFile);
 
     // Parse the command line
     cmd.Parse(argc, argv);
+
+    // Load testbed configuration
+    TestbedConfig testbedConfig = LoadConfig(configFile);
+    
+    // Update UE number based on config
+    ueNumPergNb = testbedConfig.num_ues;
 
     /*
      * Check if the frequency is in the allowed range.
