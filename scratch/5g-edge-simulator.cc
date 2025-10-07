@@ -173,7 +173,8 @@ main(int argc, char* argv[])
     uint16_t gNbNum = 1;
     uint16_t ueNumPergNb = 2;
     bool logging = false;
-    bool doubleOperationalBand = true;
+    // Set to false for single-band Band 78 configuration (TDD mode)
+    bool doubleOperationalBand = false;
 
     // Traffic parameters (that we will use inside this script):
     uint32_t udpPacketSizeULL = 100;
@@ -198,6 +199,10 @@ main(int argc, char* argv[])
     double centralFrequencyBand2 = 28.2e9;
     double bandwidthBand2 = 50e6;
     double totalTxPower = 35;
+
+    // TDD Pattern for Band 78 configuration
+    // Default pattern: 7 DL slots, 1 Special slot, 2 UL slots (typical for eMBB applications)
+    std::string tddPattern = "DL|DL|DL|DL|DL|DL|DL|S|UL|UL|";
 
     // Where we will store the output files.
     std::string simTag = "default";
@@ -247,6 +252,10 @@ main(int argc, char* argv[])
                  "total tx power that will be proportionally assigned to"
                  " bands, CCs and bandwidth parts depending on each BWP bandwidth ",
                  totalTxPower);
+    cmd.AddValue("tddPattern", 
+                 "TDD pattern for Band 78 (e.g., 'DL|DL|DL|DL|DL|DL|DL|S|UL|UL|'). "
+                 "DL=Downlink, UL=Uplink, S=Special, F=Flexible", 
+                 tddPattern);
     cmd.AddValue("simTag",
                  "tag to be appended to output filenames to distinguish simulation campaigns",
                  simTag);
@@ -549,6 +558,12 @@ main(int argc, char* argv[])
         ->SetAttribute("Numerology", UintegerValue(numerologyBwp1));
     nrHelper->GetGnbPhy(gnbNetDev.Get(0), 0)
         ->SetAttribute("TxPower", DoubleValue(10 * log10((bandwidthBand1 / totalBandwidth) * x)));
+    
+    // Configure TDD Pattern for Band 78 testbed simulation
+    // Pattern format: DL=Downlink, UL=Uplink, S=Special(flexible), F=Flexible
+    // This pattern provides good balance for 5G applications: 7 DL, 2 UL, 1 Special slot per 10ms frame
+    nrHelper->GetGnbPhy(gnbNetDev.Get(0), 0)
+        ->SetAttribute("Pattern", StringValue(tddPattern));
 
     if (doubleOperationalBand)
     {
