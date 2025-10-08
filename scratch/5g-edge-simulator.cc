@@ -461,15 +461,15 @@ main(int argc, char* argv[])
     // Core latency
     nrEpcHelper->SetAttribute("S1uLinkDelay", TimeValue(MilliSeconds(0)));
 
-    // Antennas for all the UEs
+    // Antennas for all the UEs - configured for 2x2 MIMO (testbed specification)
     nrHelper->SetUeAntennaAttribute("NumRows", UintegerValue(2));
-    nrHelper->SetUeAntennaAttribute("NumColumns", UintegerValue(4));
+    nrHelper->SetUeAntennaAttribute("NumColumns", UintegerValue(1));  // 2x1 = 2 antennas
     nrHelper->SetUeAntennaAttribute("AntennaElement",
                                     PointerValue(CreateObject<IsotropicAntennaModel>()));
 
-    // Antennas for all the gNbs
-    nrHelper->SetGnbAntennaAttribute("NumRows", UintegerValue(4));
-    nrHelper->SetGnbAntennaAttribute("NumColumns", UintegerValue(8));
+    // Antennas for all the gNbs - configured for 2x2 MIMO base station side
+    nrHelper->SetGnbAntennaAttribute("NumRows", UintegerValue(2));
+    nrHelper->SetGnbAntennaAttribute("NumColumns", UintegerValue(1));  // 2x1 = 2 antennas
     nrHelper->SetGnbAntennaAttribute("AntennaElement",
                                      PointerValue(CreateObject<IsotropicAntennaModel>()));
 
