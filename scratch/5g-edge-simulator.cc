@@ -62,6 +62,8 @@ $ ./ns3 run "cttc-nr-demo --PrintHelp"
 #include <sstream>
 #include <map>
 #include <vector>
+#include <iomanip>
+#include <limits>
 
 /*
  * Use, always, the namespace ns3. All the NR classes are inside such namespace.
@@ -155,6 +157,30 @@ TestbedConfig LoadConfig(const std::string& configPath) {
 }
 
 /*
+ * Global variables and callback functions for ping RTT measurement
+ */
+struct PingResult {
+    uint32_t ueId;
+    uint32_t sequence;
+    Time rtt;
+    Time timestamp;
+};
+
+std::vector<PingResult> pingResults;
+
+void PingRttCallback(uint16_t nodeId, Time rtt)
+{
+    PingResult result;
+    result.ueId = nodeId;
+    result.sequence = 0; // Will be incremented by the trace source
+    result.rtt = rtt;
+    result.timestamp = Simulator::Now();
+    pingResults.push_back(result);
+    
+    std::cout << "Ping RTT: UE " << nodeId << " time=" << rtt.GetMilliSeconds() << " ms" << std::endl;
+}
+
+/*
  * With this line, we will be able to see the logs of the file by enabling the
  * component "CttcNrDemo".
  * Further information on how logging works can be found in the ns-3 documentation [3].
@@ -175,10 +201,9 @@ main(int argc, char* argv[])
     bool logging = false;
 
     // Traffic parameters (that we will use inside this script):
-    uint32_t udpPacketSizeULL = 100;
-    uint32_t udpPacketSizeBe = 1252;
-    uint32_t lambdaULL = 10000;
-    uint32_t lambdaBe = 10000;
+    uint32_t pingSize = 64;  // Standard ping packet size
+    uint32_t pingCount = 10;  // Number of pings to send
+    double pingInterval = 1.0;  // Ping interval in seconds
 
     // Simulation parameters. Please don't use double to indicate seconds; use
     // ns-3 Time values which use integers to avoid portability issues.
@@ -214,18 +239,15 @@ main(int argc, char* argv[])
     cmd.AddValue("gNbNum", "The number of gNbs in multiple-ue topology", gNbNum);
     cmd.AddValue("ueNumPergNb", "The number of UE per gNb in multiple-ue topology", ueNumPergNb);
     cmd.AddValue("logging", "Enable logging", logging);
-    cmd.AddValue("packetSizeUll",
-                 "packet size in bytes to be used by ultra low latency traffic",
-                 udpPacketSizeULL);
-    cmd.AddValue("packetSizeBe",
-                 "packet size in bytes to be used by best effort traffic",
-                 udpPacketSizeBe);
-    cmd.AddValue("lambdaUll",
-                 "Number of UDP packets in one second for ultra low latency traffic",
-                 lambdaULL);
-    cmd.AddValue("lambdaBe",
-                 "Number of UDP packets in one second for best effort traffic",
-                 lambdaBe);
+    cmd.AddValue("pingSize",
+                 "Ping packet size in bytes",
+                 pingSize);
+    cmd.AddValue("pingCount",
+                 "Number of ping packets to send",
+                 pingCount);
+    cmd.AddValue("pingInterval",
+                 "Interval between ping packets in seconds",
+                 pingInterval);
     cmd.AddValue("simTime", "Simulation time", simTime);
     cmd.AddValue("centralFrequencyBand1",
                  "The system frequency to be used in Band 78",
@@ -272,8 +294,7 @@ main(int argc, char* argv[])
      */
     if (logging)
     {
-        LogComponentEnable("UdpClient", LOG_LEVEL_INFO);
-        LogComponentEnable("UdpServer", LOG_LEVEL_INFO);
+        LogComponentEnable("Ping", LOG_LEVEL_INFO);
         LogComponentEnable("NrPdcp", LOG_LEVEL_INFO);
     }
 
@@ -505,12 +526,11 @@ main(int argc, char* argv[])
 
     NetDeviceContainer gnbNetDev =
         nrHelper->InstallGnbDevice(gridScenario.GetBaseStations(), allBwps);
-    NetDeviceContainer ueLowLatNetDev = nrHelper->InstallUeDevice(ueLowLatContainer, allBwps);
-    NetDeviceContainer ueVoiceNetDev = nrHelper->InstallUeDevice(ueVoiceContainer, allBwps);
+    // Install UE devices for all user terminals (we'll manage traffic types through bearers)
+    NetDeviceContainer ueNetDev = nrHelper->InstallUeDevice(gridScenario.GetUserTerminals(), allBwps);
 
     randomStream += nrHelper->AssignStreams(gnbNetDev, randomStream);
-    randomStream += nrHelper->AssignStreams(ueLowLatNetDev, randomStream);
-    randomStream += nrHelper->AssignStreams(ueVoiceNetDev, randomStream);
+    randomStream += nrHelper->AssignStreams(ueNetDev, randomStream);
     /*
      * Case (iii): Go node for node and change the attributes we have to setup
      * per-node.
@@ -540,126 +560,41 @@ main(int argc, char* argv[])
 
     internet.Install(gridScenario.GetUserTerminals());
 
-    Ipv4InterfaceContainer ueLowLatIpIface =
-        nrEpcHelper->AssignUeIpv4Address(NetDeviceContainer(ueLowLatNetDev));
-    Ipv4InterfaceContainer ueVoiceIpIface =
-        nrEpcHelper->AssignUeIpv4Address(NetDeviceContainer(ueVoiceNetDev));
+    Ipv4InterfaceContainer ueIpIface =
+        nrEpcHelper->AssignUeIpv4Address(NetDeviceContainer(ueNetDev));
 
     // attach UEs to the closest gNB
-    nrHelper->AttachToClosestGnb(ueLowLatNetDev, gnbNetDev);
-    nrHelper->AttachToClosestGnb(ueVoiceNetDev, gnbNetDev);
+    nrHelper->AttachToClosestGnb(ueNetDev, gnbNetDev);
 
     /*
-     * Traffic part. Install two kind of traffic: low-latency and voice, each
-     * identified by a particular source port.
+     * Traffic part. Install ping applications to measure RTT from UE to edge server
+     * This replaces the previous UDP traffic with simple ping measurements
      */
-    uint16_t dlPortLowLat = 1234;
-    uint16_t dlPortVoice = 1235;
 
-    ApplicationContainer serverApps;
-
-    // The sink will always listen to the specified ports
-    UdpServerHelper dlPacketSinkLowLat(dlPortLowLat);
-    UdpServerHelper dlPacketSinkVoice(dlPortVoice);
-
-    // The server, that is the application which is listening, is installed in the UE
-    serverApps.Add(dlPacketSinkLowLat.Install(ueLowLatContainer));
-    serverApps.Add(dlPacketSinkVoice.Install(ueVoiceContainer));
+    ApplicationContainer pingApps;
 
     /*
-     * Configure attributes for the different generators, using user-provided
-     * parameters for generating a CBR traffic
-     *
-     * Low-Latency configuration and object creation:
+     * Configure ping application attributes
      */
-    UdpClientHelper dlClientLowLat;
-    dlClientLowLat.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
-    dlClientLowLat.SetAttribute("PacketSize", UintegerValue(udpPacketSizeULL));
-    dlClientLowLat.SetAttribute("Interval", TimeValue(Seconds(1.0 / lambdaULL)));
+    PingHelper pingHelper(remoteHostIpv4Address);
 
-    // The bearer that will carry low latency traffic
-    NrEpsBearer lowLatBearer(NrEpsBearer::NGBR_LOW_LAT_EMBB);
+    pingHelper.SetAttribute("Count", UintegerValue(pingCount));
+    pingHelper.SetAttribute("Size", UintegerValue(pingSize));
+    pingHelper.SetAttribute("Interval", TimeValue(Seconds(pingInterval)));
 
-    // The filter for the low-latency traffic
-    Ptr<NrEpcTft> lowLatTft = Create<NrEpcTft>();
-    NrEpcTft::PacketFilter dlpfLowLat;
-    dlpfLowLat.localPortStart = dlPortLowLat;
-    dlpfLowLat.localPortEnd = dlPortLowLat;
-    lowLatTft->Add(dlpfLowLat);
+    // Install ping applications on all UEs to ping the remote host (edge server)
+    pingApps = pingHelper.Install(gridScenario.GetUserTerminals());
 
-    // Voice configuration and object creation:
-    UdpClientHelper dlClientVoice;
-    dlClientVoice.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
-    dlClientVoice.SetAttribute("PacketSize", UintegerValue(udpPacketSizeBe));
-    dlClientVoice.SetAttribute("Interval", TimeValue(Seconds(1.0 / lambdaBe)));
+    // Connect ping RTT trace to our callback function
+    Config::ConnectWithoutContext("/NodeList/*/ApplicationList/*/$ns3::Ping/Rtt",
+                                  MakeCallback(&PingRttCallback));
 
-    // The bearer that will carry voice traffic
-    NrEpsBearer voiceBearer(NrEpsBearer::GBR_CONV_VOICE);
-
-    // The filter for the voice traffic
-    Ptr<NrEpcTft> voiceTft = Create<NrEpcTft>();
-    NrEpcTft::PacketFilter dlpfVoice;
-    dlpfVoice.localPortStart = dlPortVoice;
-    dlpfVoice.localPortEnd = dlPortVoice;
-    voiceTft->Add(dlpfVoice);
-
-    /*
-     * Let's install the applications!
-     */
-    ApplicationContainer clientApps;
-
-    for (uint32_t i = 0; i < ueLowLatContainer.GetN(); ++i)
-    {
-        Ptr<Node> ue = ueLowLatContainer.Get(i);
-        Ptr<NetDevice> ueDevice = ueLowLatNetDev.Get(i);
-        Address ueAddress = ueLowLatIpIface.GetAddress(i);
-
-        // The client, who is transmitting, is installed in the remote host,
-        // with destination address set to the address of the UE
-        dlClientLowLat.SetAttribute(
-            "Remote",
-            AddressValue(addressUtils::ConvertToSocketAddress(ueAddress, dlPortLowLat)));
-        clientApps.Add(dlClientLowLat.Install(remoteHost));
-
-        // Activate a dedicated bearer for the traffic type
-        nrHelper->ActivateDedicatedEpsBearer(ueDevice, lowLatBearer, lowLatTft);
-    }
-
-    for (uint32_t i = 0; i < ueVoiceContainer.GetN(); ++i)
-    {
-        Ptr<Node> ue = ueVoiceContainer.Get(i);
-        Ptr<NetDevice> ueDevice = ueVoiceNetDev.Get(i);
-        Address ueAddress = ueVoiceIpIface.GetAddress(i);
-
-        // The client, who is transmitting, is installed in the remote host,
-        // with destination address set to the address of the UE
-        dlClientVoice.SetAttribute(
-            "Remote",
-            AddressValue(addressUtils::ConvertToSocketAddress(ueAddress, dlPortVoice)));
-        clientApps.Add(dlClientVoice.Install(remoteHost));
-
-        // Activate a dedicated bearer for the traffic type
-        nrHelper->ActivateDedicatedEpsBearer(ueDevice, voiceBearer, voiceTft);
-    }
-
-    // start UDP server and client apps
-    serverApps.Start(udpAppStartTime);
-    clientApps.Start(udpAppStartTime);
-    serverApps.Stop(simTime);
-    clientApps.Stop(simTime);
+    // Start ping applications
+    pingApps.Start(udpAppStartTime);
+    pingApps.Stop(simTime);
 
     // enable the traces provided by the nr module
     // nrHelper->EnableTraces();
-
-    FlowMonitorHelper flowmonHelper;
-    NodeContainer endpointNodes;
-    endpointNodes.Add(remoteHost);
-    endpointNodes.Add(gridScenario.GetUserTerminals());
-
-    Ptr<ns3::FlowMonitor> monitor = flowmonHelper.Install(endpointNodes);
-    monitor->SetAttribute("DelayBinWidth", DoubleValue(0.001));
-    monitor->SetAttribute("JitterBinWidth", DoubleValue(0.001));
-    monitor->SetAttribute("PacketSizeBinWidth", DoubleValue(20));
 
     Simulator::Stop(simTime);
     Simulator::Run();
@@ -671,15 +606,7 @@ main(int argc, char* argv[])
     config.ConfigureAttributes ();
     */
 
-    // Print per-flow statistics
-    monitor->CheckForLostPackets();
-    Ptr<Ipv4FlowClassifier> classifier =
-        DynamicCast<Ipv4FlowClassifier>(flowmonHelper.GetClassifier());
-    FlowMonitor::FlowStatsContainer stats = monitor->GetFlowStats();
-
-    double averageFlowThroughput = 0.0;
-    double averageFlowDelay = 0.0;
-
+    // Print ping statistics
     std::ofstream outFile;
     std::string filename = outputDir + "/" + simTag;
     outFile.open(filename.c_str(), std::ofstream::out | std::ofstream::trunc);
@@ -691,59 +618,45 @@ main(int argc, char* argv[])
 
     outFile.setf(std::ios_base::fixed);
 
-    double flowDuration = (simTime - udpAppStartTime).GetSeconds();
-    for (std::map<FlowId, FlowMonitor::FlowStats>::const_iterator i = stats.begin();
-         i != stats.end();
-         ++i)
-    {
-        Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(i->first);
-        std::stringstream protoStream;
-        protoStream << (uint16_t)t.protocol;
-        if (t.protocol == 6)
-        {
-            protoStream.str("TCP");
-        }
-        if (t.protocol == 17)
-        {
-            protoStream.str("UDP");
-        }
-        outFile << "Flow " << i->first << " (" << t.sourceAddress << ":" << t.sourcePort << " -> "
-                << t.destinationAddress << ":" << t.destinationPort << ") proto "
-                << protoStream.str() << "\n";
-        outFile << "  Tx Packets: " << i->second.txPackets << "\n";
-        outFile << "  Tx Bytes:   " << i->second.txBytes << "\n";
-        outFile << "  TxOffered:  " << i->second.txBytes * 8.0 / flowDuration / 1000.0 / 1000.0
-                << " Mbps\n";
-        outFile << "  Rx Bytes:   " << i->second.rxBytes << "\n";
-        if (i->second.rxPackets > 0)
-        {
-            // Measure the duration of the flow from receiver's perspective
-            averageFlowThroughput += i->second.rxBytes * 8.0 / flowDuration / 1000 / 1000;
-            averageFlowDelay += 1000 * i->second.delaySum.GetSeconds() / i->second.rxPackets;
+    // Calculate ping statistics
+    double totalRtt = 0.0;
+    double minRtt = std::numeric_limits<double>::max();
+    double maxRtt = 0.0;
+    uint32_t successfulPings = pingResults.size();
 
-            outFile << "  Throughput: " << i->second.rxBytes * 8.0 / flowDuration / 1000 / 1000
-                    << " Mbps\n";
-            outFile << "  Mean delay:  "
-                    << 1000 * i->second.delaySum.GetSeconds() / i->second.rxPackets << " ms\n";
-            // outFile << "  Mean upt:  " << i->second.uptSum / i->second.rxPackets / 1000/1000 << "
-            // Mbps \n";
-            outFile << "  Mean jitter:  "
-                    << 1000 * i->second.jitterSum.GetSeconds() / i->second.rxPackets << " ms\n";
+    outFile << "=== Ping Test Results ===" << std::endl;
+    outFile << "Target: " << remoteHostIpv4Address << std::endl;
+    outFile << "Packet size: " << pingSize << " bytes" << std::endl;
+    outFile << "Number of UEs: " << gridScenario.GetUserTerminals().GetN() << std::endl;
+    outFile << std::endl;
+
+    if (successfulPings > 0) {
+        outFile << "Individual ping results:" << std::endl;
+        for (const auto& result : pingResults) {
+            double rttMs = result.rtt.GetMilliSeconds();
+            outFile << "UE " << result.ueId << " seq=" << result.sequence 
+                    << " time=" << std::fixed << std::setprecision(3) << rttMs << " ms" << std::endl;
+            
+            totalRtt += rttMs;
+            minRtt = std::min(minRtt, rttMs);
+            maxRtt = std::max(maxRtt, rttMs);
         }
-        else
-        {
-            outFile << "  Throughput:  0 Mbps\n";
-            outFile << "  Mean delay:  0 ms\n";
-            outFile << "  Mean jitter: 0 ms\n";
-        }
-        outFile << "  Rx Packets: " << i->second.rxPackets << "\n";
+
+        double avgRtt = totalRtt / successfulPings;
+        
+        outFile << std::endl;
+        outFile << "=== Summary Statistics ===" << std::endl;
+        outFile << "Packets transmitted: " << (pingCount * gridScenario.GetUserTerminals().GetN()) << std::endl;
+        outFile << "Packets received: " << successfulPings << std::endl;
+        outFile << "Packet loss: " << std::fixed << std::setprecision(1) 
+                << (100.0 * (pingCount * gridScenario.GetUserTerminals().GetN() - successfulPings) / 
+                   (pingCount * gridScenario.GetUserTerminals().GetN())) << "%" << std::endl;
+        outFile << "Average RTT: " << std::fixed << std::setprecision(3) << avgRtt << " ms" << std::endl;
+        outFile << "Minimum RTT: " << std::fixed << std::setprecision(3) << minRtt << " ms" << std::endl;
+        outFile << "Maximum RTT: " << std::fixed << std::setprecision(3) << maxRtt << " ms" << std::endl;
+    } else {
+        outFile << "No successful pings received!" << std::endl;
     }
-
-    double meanFlowThroughput = averageFlowThroughput / stats.size();
-    double meanFlowDelay = averageFlowDelay / stats.size();
-
-    outFile << "\n\n  Mean flow throughput: " << meanFlowThroughput << "\n";
-    outFile << "  Mean flow delay: " << meanFlowDelay << "\n";
 
     outFile.close();
 
@@ -755,43 +668,5 @@ main(int argc, char* argv[])
     }
 
     Simulator::Destroy();
-
-    if (argc == 0)
-    {
-        double toleranceMeanFlowThroughput = 0.0001 * 56.258560;
-        double toleranceMeanFlowDelay = 0.0001 * 0.553292;
-
-        if (meanFlowThroughput >= 56.258560 - toleranceMeanFlowThroughput &&
-            meanFlowThroughput <= 56.258560 + toleranceMeanFlowThroughput &&
-            meanFlowDelay >= 0.553292 - toleranceMeanFlowDelay &&
-            meanFlowDelay <= 0.553292 + toleranceMeanFlowDelay)
-        {
-            return EXIT_SUCCESS;
-        }
-        else
-        {
-            return EXIT_FAILURE;
-        }
-    }
-    else if (argc == 1 and ueNumPergNb == 9) // called from examples-to-run.py with these parameters
-    {
-        double toleranceMeanFlowThroughput = 0.0001 * 47.858536;
-        double toleranceMeanFlowDelay = 0.0001 * 10.504189;
-
-        if (meanFlowThroughput >= 47.858536 - toleranceMeanFlowThroughput &&
-            meanFlowThroughput <= 47.858536 + toleranceMeanFlowThroughput &&
-            meanFlowDelay >= 10.504189 - toleranceMeanFlowDelay &&
-            meanFlowDelay <= 10.504189 + toleranceMeanFlowDelay)
-        {
-            return EXIT_SUCCESS;
-        }
-        else
-        {
-            return EXIT_FAILURE;
-        }
-    }
-    else
-    {
-        return EXIT_SUCCESS; // we dont check other parameters configurations at the moment
-    }
+    return EXIT_SUCCESS;
 }
