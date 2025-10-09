@@ -80,6 +80,7 @@ struct TestbedConfig {
     std::vector<uint32_t> video_detection_ue_indices;
     std::vector<uint32_t> video_sr_ue_indices;
     std::vector<uint32_t> file_transfer_ue_indices;
+    std::vector<uint32_t> throughput_ue_indices;
     uint32_t max_cpus = 24;
 };
 
@@ -150,6 +151,7 @@ TestbedConfig LoadConfig(const std::string& configPath) {
     config.video_detection_ue_indices = ParseIndices(configMap["video_detection_ue_indices"]);
     config.video_sr_ue_indices = ParseIndices(configMap["video_sr_ue_indices"]);
     config.file_transfer_ue_indices = ParseIndices(configMap["file_transfer_ue_indices"]);
+    config.throughput_ue_indices = ParseIndices(configMap["throughput_ue_indices"]);
     
     std::cout << "Loaded config: " << config.num_ues << " UEs, " << config.max_cpus << " max CPUs" << std::endl;
     
@@ -202,12 +204,17 @@ main(int argc, char* argv[])
 
     // Traffic parameters (that we will use inside this script):
     uint32_t pingSize = 64;  // Standard ping packet size
-    uint32_t pingCount = 10;  // Number of pings to send
+    uint32_t pingCount = 3;  // Number of pings to send (reduced for faster testing)
     double pingInterval = 1.0;  // Ping interval in seconds
+    
+    // Throughput test parameters:
+    uint32_t throughputPacketSize = 1024;  // Throughput test packet size
+    uint32_t throughputDataRate = 1000000000;  // Data rate in bps (1 Gbps default)
+    Time throughputDuration = Seconds(10);  // Duration of throughput test
 
     // Simulation parameters. Please don't use double to indicate seconds; use
     // ns-3 Time values which use integers to avoid portability issues.
-    Time simTime = MilliSeconds(1000);
+    Time simTime = MilliSeconds(5000);  // 5 seconds default for faster testing
     Time udpAppStartTime = MilliSeconds(400);
 
     // NR parameters configured for Band 78 (3.5 GHz) testbed
@@ -248,6 +255,12 @@ main(int argc, char* argv[])
     cmd.AddValue("pingInterval",
                  "Interval between ping packets in seconds",
                  pingInterval);
+    cmd.AddValue("throughputPacketSize",
+                 "Throughput test packet size in bytes",
+                 throughputPacketSize);
+    cmd.AddValue("throughputDataRate",
+                 "Throughput test data rate in bps",
+                 throughputDataRate);
     cmd.AddValue("simTime", "Simulation time", simTime);
     cmd.AddValue("centralFrequencyBand1",
                  "The system frequency to be used in Band 78",
@@ -338,6 +351,7 @@ main(int argc, char* argv[])
     NodeContainer ueVideoSRContainer;
     NodeContainer ueFileTransferContainer;
     NodeContainer ueSMECContainer;
+    NodeContainer ueThroughputContainer;
 
     // Helper function to check if UE index is in a vector
     auto isUEInVector = [](uint32_t ueIndex, const std::vector<uint32_t>& vec) {
@@ -365,6 +379,9 @@ main(int argc, char* argv[])
         if (isUEInVector(ueIndex, testbedConfig.file_transfer_ue_indices)) {
             ueFileTransferContainer.Add(ue);
         }
+        if (isUEInVector(ueIndex, testbedConfig.throughput_ue_indices)) {
+            ueThroughputContainer.Add(ue);
+        }
     }
 
     std::cout << "UE Assignment Summary:" << std::endl;
@@ -373,6 +390,7 @@ main(int argc, char* argv[])
     std::cout << "  Detection UEs: " << ueVideoDetectionContainer.GetN() << std::endl;
     std::cout << "  SR UEs: " << ueVideoSRContainer.GetN() << std::endl;
     std::cout << "  File Transfer UEs: " << ueFileTransferContainer.GetN() << std::endl;
+    std::cout << "  Throughput Test UEs: " << ueThroughputContainer.GetN() << std::endl;
     std::cout << "  Total UEs created: " << gridScenario.GetUserTerminals().GetN() << std::endl;
 
     /*
@@ -567,34 +585,152 @@ main(int argc, char* argv[])
     nrHelper->AttachToClosestGnb(ueNetDev, gnbNetDev);
 
     /*
-     * Traffic part. Install ping applications to measure RTT from UE to edge server
-     * This replaces the previous UDP traffic with simple ping measurements
+     * Traffic part. Install applications based on UE type:
+     * - Throughput UEs: UDP client/server for max throughput testing
+     * - All other UEs (default): Ping applications for RTT measurement
      */
 
-    ApplicationContainer pingApps;
+    ApplicationContainer allApps;
+    
+    // Helper function to check if any UE is assigned to specific application types
+    bool hasSpecificAppUEs = (ueThroughputContainer.GetN() > 0 ||
+                             ueSMECContainer.GetN() > 0 ||
+                             ueTranscodingContainer.GetN() > 0 ||
+                             ueVideoDetectionContainer.GetN() > 0 ||
+                             ueVideoSRContainer.GetN() > 0 ||
+                             ueFileTransferContainer.GetN() > 0);
+
+    // Create containers for ping UEs (default application)
+    NodeContainer uePingContainer;
+    
+    // If no specific applications are assigned, all UEs use ping
+    if (!hasSpecificAppUEs) {
+        uePingContainer = gridScenario.GetUserTerminals();
+    } else {
+        // Add UEs that are not assigned to any specific application type to ping container
+        for (uint32_t j = 0; j < gridScenario.GetUserTerminals().GetN(); ++j) {
+            Ptr<Node> ue = gridScenario.GetUserTerminals().Get(j);
+            uint32_t ueIndex = j + 1;
+            
+            bool isAssigned = (isUEInVector(ueIndex, testbedConfig.throughput_ue_indices) ||
+                             isUEInVector(ueIndex, testbedConfig.smec_ue_indices) ||
+                             isUEInVector(ueIndex, testbedConfig.transcoding_ue_indices) ||
+                             isUEInVector(ueIndex, testbedConfig.video_detection_ue_indices) ||
+                             isUEInVector(ueIndex, testbedConfig.video_sr_ue_indices) ||
+                             isUEInVector(ueIndex, testbedConfig.file_transfer_ue_indices));
+            
+            if (!isAssigned) {
+                uePingContainer.Add(ue);
+            }
+        }
+    }
+
+    std::cout << "Application Assignment:" << std::endl;
+    std::cout << "  Ping UEs: " << uePingContainer.GetN() << std::endl;
 
     /*
-     * Configure ping application attributes
+     * Install Throughput Test Applications (UDP Client/Server for max throughput)
      */
-    PingHelper pingHelper(remoteHostIpv4Address);
+    if (ueThroughputContainer.GetN() > 0) {
+        std::cout << "Setting up throughput test applications..." << std::endl;
+        
+        // Throughput test uses UDP with high data rates
+        uint16_t dlPortThroughput = 9999;
+        uint16_t ulPortThroughput = 9998;
 
-    pingHelper.SetAttribute("Count", UintegerValue(pingCount));
-    pingHelper.SetAttribute("Size", UintegerValue(pingSize));
-    pingHelper.SetAttribute("Interval", TimeValue(Seconds(pingInterval)));
+        // Downlink throughput test (remote host -> UE)
+        UdpServerHelper dlThroughputServer(dlPortThroughput);
+        ApplicationContainer dlThroughputServerApps = dlThroughputServer.Install(ueThroughputContainer);
+        allApps.Add(dlThroughputServerApps);
 
-    // Install ping applications on all UEs to ping the remote host (edge server)
-    pingApps = pingHelper.Install(gridScenario.GetUserTerminals());
+        UdpClientHelper dlThroughputClient;
+        dlThroughputClient.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
+        dlThroughputClient.SetAttribute("PacketSize", UintegerValue(throughputPacketSize));
+        dlThroughputClient.SetAttribute("Interval", 
+                                       TimeValue(Seconds(throughputPacketSize * 8.0 / throughputDataRate)));
 
-    // Connect ping RTT trace to our callback function
-    Config::ConnectWithoutContext("/NodeList/*/ApplicationList/*/$ns3::Ping/Rtt",
-                                  MakeCallback(&PingRttCallback));
+        // Uplink throughput test (UE -> remote host)
+        UdpServerHelper ulThroughputServer(ulPortThroughput);
+        ApplicationContainer ulThroughputServerApps = ulThroughputServer.Install(remoteHost);
+        allApps.Add(ulThroughputServerApps);
 
-    // Start ping applications
-    pingApps.Start(udpAppStartTime);
-    pingApps.Stop(simTime);
+        UdpClientHelper ulThroughputClient;
+        ulThroughputClient.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
+        ulThroughputClient.SetAttribute("PacketSize", UintegerValue(throughputPacketSize));
+        ulThroughputClient.SetAttribute("Interval", 
+                                       TimeValue(Seconds(throughputPacketSize * 8.0 / throughputDataRate)));
+
+        // Install clients for each throughput UE
+        for (uint32_t i = 0; i < ueThroughputContainer.GetN(); ++i) {
+            // Find the UE index in the full UE list
+            Ptr<Node> throughputUE = ueThroughputContainer.Get(i);
+            uint32_t ueIdx = 0;
+            for (uint32_t j = 0; j < gridScenario.GetUserTerminals().GetN(); ++j) {
+                if (gridScenario.GetUserTerminals().Get(j) == throughputUE) {
+                    ueIdx = j;
+                    break;
+                }
+            }
+            
+            Address ueAddress = ueIpIface.GetAddress(ueIdx);
+
+            // Downlink client (remote host sends to UE)
+            dlThroughputClient.SetAttribute("Remote", 
+                AddressValue(addressUtils::ConvertToSocketAddress(ueAddress, dlPortThroughput)));
+            allApps.Add(dlThroughputClient.Install(remoteHost));
+
+            // Uplink client (UE sends to remote host)
+            ulThroughputClient.SetAttribute("Remote", 
+                AddressValue(addressUtils::ConvertToSocketAddress(remoteHostIpv4Address, ulPortThroughput)));
+            allApps.Add(ulThroughputClient.Install(throughputUE));
+        }
+    }
+
+    /*
+     * Install Ping Applications (default for unassigned UEs)
+     */
+    if (uePingContainer.GetN() > 0) {
+        std::cout << "Setting up ping applications..." << std::endl;
+        
+        ApplicationContainer pingApps;
+
+        /*
+         * Configure ping application attributes
+         */
+        PingHelper pingHelper(remoteHostIpv4Address);
+
+        pingHelper.SetAttribute("Count", UintegerValue(pingCount));
+        pingHelper.SetAttribute("Size", UintegerValue(pingSize));
+        pingHelper.SetAttribute("Interval", TimeValue(Seconds(pingInterval)));
+
+        // Install ping applications on ping UEs
+        pingApps = pingHelper.Install(uePingContainer);
+        allApps.Add(pingApps);
+
+        // Connect ping RTT trace to our callback function
+        Config::ConnectWithoutContext("/NodeList/*/ApplicationList/*/$ns3::Ping/Rtt",
+                                      MakeCallback(&PingRttCallback));
+    }
+
+    // Start all applications
+    allApps.Start(udpAppStartTime);
+    allApps.Stop(simTime);
 
     // enable the traces provided by the nr module
     // nrHelper->EnableTraces();
+
+    // Install FlowMonitor if we have throughput UEs for flow statistics
+    Ptr<ns3::FlowMonitor> monitor = nullptr;
+    FlowMonitorHelper flowmonHelper;
+    if (ueThroughputContainer.GetN() > 0) {
+        NodeContainer endpointNodes;
+        endpointNodes.Add(remoteHost);
+        endpointNodes.Add(gridScenario.GetUserTerminals());
+        monitor = flowmonHelper.Install(endpointNodes);
+        monitor->SetAttribute("DelayBinWidth", DoubleValue(0.001));
+        monitor->SetAttribute("JitterBinWidth", DoubleValue(0.001));
+        monitor->SetAttribute("PacketSizeBinWidth", DoubleValue(20));
+    }
 
     Simulator::Stop(simTime);
     Simulator::Run();
@@ -606,7 +742,7 @@ main(int argc, char* argv[])
     config.ConfigureAttributes ();
     */
 
-    // Print ping statistics
+    // Print application results (ping and/or throughput)
     std::ofstream outFile;
     std::string filename = outputDir + "/" + simTag;
     outFile.open(filename.c_str(), std::ofstream::out | std::ofstream::trunc);
@@ -618,19 +754,30 @@ main(int argc, char* argv[])
 
     outFile.setf(std::ios_base::fixed);
 
-    // Calculate ping statistics
-    double totalRtt = 0.0;
-    double minRtt = std::numeric_limits<double>::max();
-    double maxRtt = 0.0;
-    uint32_t successfulPings = pingResults.size();
-
-    outFile << "=== Ping Test Results ===" << std::endl;
+    outFile << "=== 5G Edge Simulation Results ===" << std::endl;
     outFile << "Target: " << remoteHostIpv4Address << std::endl;
-    outFile << "Packet size: " << pingSize << " bytes" << std::endl;
-    outFile << "Number of UEs: " << gridScenario.GetUserTerminals().GetN() << std::endl;
+    if (useExternalServer) {
+        outFile << "Server Type: External Physical Server" << std::endl;
+    } else {
+        outFile << "Server Type: Simulated Remote Host" << std::endl;
+    }
+    outFile << "RAN-Server Link: 25 GbE" << std::endl;
+    outFile << "Total UEs: " << gridScenario.GetUserTerminals().GetN() << std::endl;
+    outFile << "Ping UEs: " << uePingContainer.GetN() << std::endl;
+    outFile << "Throughput UEs: " << ueThroughputContainer.GetN() << std::endl;
     outFile << std::endl;
 
-    if (successfulPings > 0) {
+    // Print ping results if any ping UEs exist
+    if (uePingContainer.GetN() > 0 && pingResults.size() > 0) {
+        double totalRtt = 0.0;
+        double minRtt = std::numeric_limits<double>::max();
+        double maxRtt = 0.0;
+        uint32_t successfulPings = pingResults.size();
+
+        outFile << "=== Ping Test Results ===" << std::endl;
+        outFile << "Packet size: " << pingSize << " bytes" << std::endl;
+        outFile << std::endl;
+
         outFile << "Individual ping results:" << std::endl;
         for (const auto& result : pingResults) {
             double rttMs = result.rtt.GetMilliSeconds();
@@ -645,17 +792,58 @@ main(int argc, char* argv[])
         double avgRtt = totalRtt / successfulPings;
         
         outFile << std::endl;
-        outFile << "=== Summary Statistics ===" << std::endl;
-        outFile << "Packets transmitted: " << (pingCount * gridScenario.GetUserTerminals().GetN()) << std::endl;
+        outFile << "=== Ping Summary Statistics ===" << std::endl;
+        outFile << "Packets transmitted: " << (pingCount * uePingContainer.GetN()) << std::endl;
         outFile << "Packets received: " << successfulPings << std::endl;
         outFile << "Packet loss: " << std::fixed << std::setprecision(1) 
-                << (100.0 * (pingCount * gridScenario.GetUserTerminals().GetN() - successfulPings) / 
-                   (pingCount * gridScenario.GetUserTerminals().GetN())) << "%" << std::endl;
+                << (100.0 * (pingCount * uePingContainer.GetN() - successfulPings) / 
+                   (pingCount * uePingContainer.GetN())) << "%" << std::endl;
         outFile << "Average RTT: " << std::fixed << std::setprecision(3) << avgRtt << " ms" << std::endl;
         outFile << "Minimum RTT: " << std::fixed << std::setprecision(3) << minRtt << " ms" << std::endl;
         outFile << "Maximum RTT: " << std::fixed << std::setprecision(3) << maxRtt << " ms" << std::endl;
-    } else {
-        outFile << "No successful pings received!" << std::endl;
+    }
+
+    // Print throughput results if any throughput UEs exist
+    if (ueThroughputContainer.GetN() > 0 && monitor != nullptr) {
+        monitor->CheckForLostPackets();
+        Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmonHelper.GetClassifier());
+        FlowMonitor::FlowStatsContainer stats = monitor->GetFlowStats();
+
+        outFile << std::endl << "=== Throughput Test Results ===" << std::endl;
+        outFile << "Test Duration: " << (simTime - udpAppStartTime).GetSeconds() << " seconds" << std::endl;
+        outFile << "Packet Size: " << throughputPacketSize << " bytes" << std::endl;
+        outFile << "Target Data Rate: " << throughputDataRate / 1000000.0 << " Mbps" << std::endl;
+        outFile << std::endl;
+
+        double totalThroughput = 0.0;
+        uint32_t flowCount = 0;
+        double flowDuration = (simTime - udpAppStartTime).GetSeconds();
+
+        for (std::map<FlowId, FlowMonitor::FlowStats>::const_iterator i = stats.begin(); i != stats.end(); ++i) {
+            Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(i->first);
+            
+            if (i->second.rxPackets > 0) {
+                double throughputMbps = i->second.rxBytes * 8.0 / flowDuration / 1000.0 / 1000.0;
+                totalThroughput += throughputMbps;
+                flowCount++;
+
+                outFile << "Flow " << i->first << " (" << t.sourceAddress << ":" << t.sourcePort 
+                        << " -> " << t.destinationAddress << ":" << t.destinationPort << ")" << std::endl;
+                outFile << "  Throughput: " << std::fixed << std::setprecision(3) << throughputMbps << " Mbps" << std::endl;
+                outFile << "  Packets: " << i->second.txPackets << " sent, " << i->second.rxPackets << " received" << std::endl;
+                outFile << "  Mean delay: " << std::fixed << std::setprecision(3) 
+                        << 1000 * i->second.delaySum.GetSeconds() / i->second.rxPackets << " ms" << std::endl;
+                outFile << std::endl;
+            }
+        }
+
+        if (flowCount > 0) {
+            outFile << "=== Throughput Summary ===" << std::endl;
+            outFile << "Total flows: " << flowCount << std::endl;
+            outFile << "Average throughput per flow: " << std::fixed << std::setprecision(3) 
+                    << totalThroughput / flowCount << " Mbps" << std::endl;
+            outFile << "Total throughput: " << std::fixed << std::setprecision(3) << totalThroughput << " Mbps" << std::endl;
+        }
     }
 
     outFile.close();
