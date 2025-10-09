@@ -1,0 +1,8 @@
+{
+    "num_ues": 4,
+    "smec_ue_indices": "",
+    "transcoding_ue_indices": "1,2",
+    "video_detection_ue_indices": "3,4",
+    "file_transfer_ue_indices": "",
+    "max_cpus": 32
+}
