@@ -101,6 +101,16 @@ class RemoteNodeSetup:
             # Install required dependencies
             "sudo apt-get install -y cmake libc6-dev sqlite3 libsqlite3-dev libeigen3-dev",
             
+            # Install mahimahi dependencies
+            "sudo apt install -y protobuf-compiler libprotobuf-dev autotools-dev dh-autoreconf iptables pkg-config dnsmasq-base apache2-bin debhelper libssl-dev ssl-cert libxcb-present-dev libcairo2-dev libpango1.0-dev apache2-dev git",
+            
+            # Install mahimahi from source
+            "cd /tmp && if [ ! -d 'mahimahi' ]; then git clone https://github.com/ravinet/mahimahi; fi",
+            "cd /tmp/mahimahi && ./autogen.sh",
+            "cd /tmp/mahimahi && ./configure",
+            "cd /tmp/mahimahi && make",
+            "cd /tmp/mahimahi && sudo make install",
+            
             # Clone the repository (if not exists)
             "cd /mydata && if [ ! -d '5g-edge-ns3-simulation' ]; then git clone git@github.com:Janecjy/5g-edge-ns3-simulation.git; fi",
             
@@ -145,6 +155,17 @@ class RemoteNodeSetup:
         edge_commands = [
             "sudo apt update",
             f"sudo chown -R {username} /mydata/",
+            
+            # Install mahimahi dependencies
+            "sudo apt install -y protobuf-compiler libprotobuf-dev autotools-dev dh-autoreconf iptables pkg-config dnsmasq-base apache2-bin debhelper libssl-dev ssl-cert libxcb-present-dev libcairo2-dev libpango1.0-dev apache2-dev git",
+            
+            # Install mahimahi from source
+            "cd /tmp && if [ ! -d 'mahimahi' ]; then git clone https://github.com/ravinet/mahimahi; fi",
+            "cd /tmp/mahimahi && ./autogen.sh",
+            "cd /tmp/mahimahi && ./configure",
+            "cd /tmp/mahimahi && make",
+            "cd /tmp/mahimahi && sudo make install",
+            
             # Add more edge-specific commands as needed
         ]
         
