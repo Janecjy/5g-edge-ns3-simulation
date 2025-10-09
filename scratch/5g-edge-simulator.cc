@@ -236,6 +236,10 @@ main(int argc, char* argv[])
     // Configuration file for testbed setup
     std::string configFile = "config/baseline_all_tasks.json";
 
+    // External server configuration
+    bool useExternalServer = false;
+    std::string externalServerIp = "10.10.1.2";
+
     /*
      * From here, we instruct the ns3::CommandLine class of all the input parameters
      * that we may accept as input, as well as their description, and the storage
@@ -279,6 +283,12 @@ main(int argc, char* argv[])
                  simTag);
     cmd.AddValue("outputDir", "directory where to store simulation results", outputDir);
     cmd.AddValue("configFile", "path to JSON configuration file for testbed setup", configFile);
+    cmd.AddValue("useExternalServer", 
+                 "Use external physical server instead of simulated remote host", 
+                 useExternalServer);
+    cmd.AddValue("externalServerIp", 
+                 "IP address of external server (when useExternalServer=true)", 
+                 externalServerIp);
 
     // Parse the command line
     cmd.Parse(argc, argv);
