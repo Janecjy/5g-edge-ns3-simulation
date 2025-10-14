@@ -57,6 +57,7 @@ $ ./ns3 run "cttc-nr-demo --PrintHelp"
 #include "ns3/mobility-module.h"
 #include "ns3/nr-module.h"
 #include "ns3/point-to-point-module.h"
+#include "ns3/fd-net-device-module.h"
 
 #include <fstream>
 #include <sstream>
@@ -182,6 +183,11 @@ void PingRttCallback(uint16_t nodeId, Time rtt)
     std::cout << "Ping RTT: UE " << nodeId << " time=" << rtt.GetMilliSeconds() << " ms" << std::endl;
 }
 
+static void
+edge_server_PingRtt(std::string context, uint16_t seqNo, Time rtt)
+{
+    NS_LOG_UNCOND("Received " << seqNo << " Response with RTT = " << rtt);
+}
 /*
  * With this line, we will be able to see the logs of the file by enabling the
  * component "CttcNrDemo".
@@ -214,7 +220,7 @@ main(int argc, char* argv[])
 
     // Simulation parameters. Please don't use double to indicate seconds; use
     // ns-3 Time values which use integers to avoid portability issues.
-    Time simTime = MilliSeconds(5000);  // 5 seconds default for faster testing
+    Time UEsimTime = MilliSeconds(5000);  // 5 seconds default for faster testing
     Time udpAppStartTime = MilliSeconds(400);
 
     // NR parameters configured for Band 78 (3.5 GHz) testbed
@@ -265,7 +271,7 @@ main(int argc, char* argv[])
     cmd.AddValue("throughputDataRate",
                  "Throughput test data rate in bps",
                  throughputDataRate);
-    cmd.AddValue("simTime", "Simulation time", simTime);
+    cmd.AddValue("UEsimTime", "Simulation time", UEsimTime);
     cmd.AddValue("centralFrequencyBand1",
                  "The system frequency to be used in Band 78",
                  centralFrequencyBand1);
@@ -497,8 +503,11 @@ main(int argc, char* argv[])
      *
      */
 
-    Packet::EnableChecking();
-    Packet::EnablePrinting();
+    // Enable checking add smallitem to the exsiting packets header. The smallitem header is not ethernet header format
+    // thus it will cause header decode error when attepting to send packet through real network interface
+    // Disable it to avoid the error
+    // Packet::EnableChecking();
+    // Packet::EnablePrinting();
 
     /*
      *  Case (i): Attributes valid for all the nodes
@@ -581,9 +590,44 @@ main(int argc, char* argv[])
     // for this part as well.
 
     // Use 25 GbE to match real testbed network speed between RAN and edge servers
-    auto [remoteHost, remoteHostIpv4Address] =
+    auto [edge_server, edge_server_Ipv4Address] =
         nrEpcHelper->SetupRemoteHost("25Gb/s", 2500, Seconds(0.000));
+    
+    // install and setup ethernet devicce to the edge server
+    std::string deviceName("enp94s0f1np1");
+    std::string remote("10.10.1.2");
+    std::string localAddress("10.10.1.11");
+    std::string localGateway("10.10.1.1");
+    std::string emuMode("raw");
+    Ipv4Address remoteIp(remote.c_str());
+    Ipv4Address localIp(localAddress.c_str());
+    Ipv4Mask localMask("255.255.255.0");
+    Ipv4Address gateway(localGateway.c_str());
 
+    GlobalValue::Bind("SimulatorImplementationType", StringValue("ns3::RealtimeSimulatorImpl"));
+    GlobalValue::Bind("ChecksumEnabled", BooleanValue(true));
+
+    FdNetDeviceHelper* helper = nullptr;
+    auto raw = new EmuFdNetDeviceHelper;
+    raw->SetDeviceName(deviceName);
+    helper = raw;
+    
+    // add device to edge server
+    NetDeviceContainer enet_devices = helper->Install(edge_server);
+    Ptr<NetDevice> enet_device = enet_devices.Get(0);
+    enet_device->SetAttribute("Address", Mac48AddressValue(Mac48Address::Allocate()));
+    Ptr<Ipv4> edge_server_ipv4 = edge_server->GetObject<Ipv4>();
+    uint32_t enet_interface = edge_server_ipv4->AddInterface(enet_device);
+    Ipv4InterfaceAddress address = Ipv4InterfaceAddress(localIp, localMask);
+    edge_server_ipv4->AddAddress(enet_interface, address);
+    edge_server_ipv4->SetMetric(enet_interface, 1);
+    edge_server_ipv4->SetUp(enet_interface);
+    Ipv4StaticRoutingHelper ipv4RoutingHelper;
+    Ptr<Ipv4StaticRouting> staticRouting = ipv4RoutingHelper.GetStaticRouting(edge_server_ipv4);
+    staticRouting->AddNetworkRouteTo(remoteIp, localMask, gateway, enet_interface, 1);
+
+
+    // install the internet stack for the UEs
     InternetStackHelper internet;
 
     internet.Install(gridScenario.GetUserTerminals());
@@ -661,7 +705,7 @@ main(int argc, char* argv[])
 
         // Uplink throughput test (UE -> remote host)
         UdpServerHelper ulThroughputServer(ulPortThroughput);
-        ApplicationContainer ulThroughputServerApps = ulThroughputServer.Install(remoteHost);
+        ApplicationContainer ulThroughputServerApps = ulThroughputServer.Install(edge_server);
         allApps.Add(ulThroughputServerApps);
 
         UdpClientHelper ulThroughputClient;
@@ -687,11 +731,11 @@ main(int argc, char* argv[])
             // Downlink client (remote host sends to UE)
             dlThroughputClient.SetAttribute("Remote", 
                 AddressValue(addressUtils::ConvertToSocketAddress(ueAddress, dlPortThroughput)));
-            allApps.Add(dlThroughputClient.Install(remoteHost));
+            allApps.Add(dlThroughputClient.Install(edge_server));
 
             // Uplink client (UE sends to remote host)
             ulThroughputClient.SetAttribute("Remote", 
-                AddressValue(addressUtils::ConvertToSocketAddress(remoteHostIpv4Address, ulPortThroughput)));
+                AddressValue(addressUtils::ConvertToSocketAddress(edge_server_Ipv4Address, ulPortThroughput)));
             allApps.Add(ulThroughputClient.Install(throughputUE));
         }
     }
@@ -707,7 +751,7 @@ main(int argc, char* argv[])
         /*
          * Configure ping application attributes
          */
-        PingHelper pingHelper(remoteHostIpv4Address);
+        PingHelper pingHelper(edge_server_Ipv4Address);
 
         pingHelper.SetAttribute("Count", UintegerValue(pingCount));
         pingHelper.SetAttribute("Size", UintegerValue(pingSize));
@@ -722,10 +766,21 @@ main(int argc, char* argv[])
                                       MakeCallback(&PingRttCallback));
     }
 
-    // Start all applications
-    allApps.Start(udpAppStartTime);
-    allApps.Stop(simTime);
+    // // Start all applications
+    // allApps.Start(udpAppStartTime);
+    // allApps.Stop(UEsimTime);
 
+    // Install edge server ping app
+    NS_LOG_INFO("Create edge server Ping Application");
+    Ptr<Ping> app = CreateObject<Ping>();
+    app->SetAttribute("Destination", AddressValue(remoteIp));
+    app->SetAttribute("VerboseMode", EnumValue(Ping::VerboseMode::VERBOSE));
+    app->SetAttribute("InterfaceAddress", AddressValue(edge_server_ipv4->GetAddress(enet_interface, 0).GetLocal()));
+    edge_server->AddApplication(app);
+    app->SetStartTime(Seconds(1));
+    app->SetStopTime(Seconds(22));
+    Names::Add("app", app);
+    Config::Connect("/Names/app/Rtt", MakeCallback(&edge_server_PingRtt));
     // enable the traces provided by the nr module
     // nrHelper->EnableTraces();
 
@@ -734,7 +789,7 @@ main(int argc, char* argv[])
     FlowMonitorHelper flowmonHelper;
     if (ueThroughputContainer.GetN() > 0) {
         NodeContainer endpointNodes;
-        endpointNodes.Add(remoteHost);
+        endpointNodes.Add(edge_server);
         endpointNodes.Add(gridScenario.GetUserTerminals());
         monitor = flowmonHelper.Install(endpointNodes);
         monitor->SetAttribute("DelayBinWidth", DoubleValue(0.001));
@@ -742,7 +797,7 @@ main(int argc, char* argv[])
         monitor->SetAttribute("PacketSizeBinWidth", DoubleValue(20));
     }
 
-    Simulator::Stop(simTime);
+    Simulator::Stop(Seconds(23));
     Simulator::Run();
 
     /*
@@ -765,7 +820,7 @@ main(int argc, char* argv[])
     outFile.setf(std::ios_base::fixed);
 
     outFile << "=== 5G Edge Simulation Results ===" << std::endl;
-    outFile << "Target: " << remoteHostIpv4Address << std::endl;
+    outFile << "Target: " << edge_server_Ipv4Address << std::endl;
     if (useExternalServer) {
         outFile << "Server Type: External Physical Server" << std::endl;
     } else {
@@ -820,14 +875,14 @@ main(int argc, char* argv[])
         FlowMonitor::FlowStatsContainer stats = monitor->GetFlowStats();
 
         outFile << std::endl << "=== Throughput Test Results ===" << std::endl;
-        outFile << "Test Duration: " << (simTime - udpAppStartTime).GetSeconds() << " seconds" << std::endl;
+        outFile << "Test Duration: " << (UEsimTime - udpAppStartTime).GetSeconds() << " seconds" << std::endl;
         outFile << "Packet Size: " << throughputPacketSize << " bytes" << std::endl;
         outFile << "Target Data Rate: " << throughputDataRate / 1000000.0 << " Mbps" << std::endl;
         outFile << std::endl;
 
         double totalThroughput = 0.0;
         uint32_t flowCount = 0;
-        double flowDuration = (simTime - udpAppStartTime).GetSeconds();
+        double flowDuration = (UEsimTime - udpAppStartTime).GetSeconds();
 
         for (std::map<FlowId, FlowMonitor::FlowStats>::const_iterator i = stats.begin(); i != stats.end(); ++i) {
             Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(i->first);
@@ -866,5 +921,6 @@ main(int argc, char* argv[])
     }
 
     Simulator::Destroy();
+    delete helper;
     return EXIT_SUCCESS;
 }
