@@ -6,5 +6,6 @@
     "video_sr_ue_indices": "",
     "file_transfer_ue_indices": "",
     "throughput_ue_indices": "",
+    "ping_ue_indices": "1",
     "max_cpus": 8
 }
