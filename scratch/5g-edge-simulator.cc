@@ -639,16 +639,20 @@ main(int argc, char* argv[])
     NS_LOG_INFO("Retrieve edge_server Internet Stack, IPv4 and routing");
     Ptr<Ipv4> edge_server_ipv4 = edge_server->GetObject<Ipv4>();
     uint32_t ethernet_interface_ID = edge_server_ipv4->AddInterface(device);
+    uint32_t edge_server_ue_interface_ID = ethernet_interface_ID - 1; // last interface is the UE one
+    std::cout << "Edge server interface ID: " << ethernet_interface_ID << std::endl;
+    std::cout << "Edge server UE interface ID: " << edge_server_ue_interface_ID << std::endl;
     Ipv4InterfaceAddress address = Ipv4InterfaceAddress(localIp, localMask);
     edge_server_ipv4->AddAddress(ethernet_interface_ID, address);
     edge_server_ipv4->SetMetric(ethernet_interface_ID, 0);
     edge_server_ipv4->SetUp(ethernet_interface_ID);
     Ipv4Address gateway(localGateway.c_str());
     Ipv4StaticRoutingHelper ipv4RoutingHelper;
-    Ptr<Ipv4StaticRouting> staticRouting = ipv4RoutingHelper.GetStaticRouting(edge_server_ipv4);
-    staticRouting->AddNetworkRouteTo(remoteIp, localMask, gateway, ethernet_interface_ID, 1);
+    Ptr<Ipv4StaticRouting> edge_server_staticRouting = ipv4RoutingHelper.GetStaticRouting(edge_server_ipv4);
+    edge_server_staticRouting->AddNetworkRouteTo(remoteIp, localMask, gateway, ethernet_interface_ID, 1);
     edge_server_ipv4->SetAttribute("IpForward", BooleanValue(true));
 
+    // set up UE
     InternetStackHelper internet;
 
     internet.Install(gridScenario.GetUserTerminals());
@@ -659,25 +663,30 @@ main(int argc, char* argv[])
     // attach UEs to the closest gNB
     nrHelper->AttachToClosestGnb(ueNetDev, gnbNetDev);
     
-    // Setup default gateway for UEs
+    // Setup path between UE and edge server
     Ipv4InterfaceContainer::Iterator i;
     for (i = ueIpIface.Begin (); i != ueIpIface.End (); ++i){
         std::pair<Ptr<Ipv4>, uint32_t> ueIpv4_pair = *i;
         Ptr<Ipv4> ueIpv4 = ueIpv4_pair.first;
         uint32_t ueInterface = ueIpv4_pair.second;
         Ipv4StaticRoutingHelper ipv4RoutingHelper;
-        Ptr<Ipv4StaticRouting> staticRouting = ipv4RoutingHelper.GetStaticRouting(ueIpv4);
-        staticRouting->SetDefaultRoute(remoteIp, ueInterface);
+        Ptr<Ipv4StaticRouting> ueStaticRouting = ipv4RoutingHelper.GetStaticRouting(ueIpv4);
+        // setup UE -> PGW routing
+        ueStaticRouting->SetDefaultRoute(remoteIp, ueInterface);
+        // setup  edge_server -> UE routing
+        Ipv4Address ueIpv4Address = ueIpv4->GetAddress(ueInterface, 0).GetLocal();
+        std::cout << "UE IP Address: " << ueIpv4Address << std::endl;
+        edge_server_staticRouting->AddNetworkRouteTo(ueIpv4Address, Ipv4Mask("255.255.255.0"), edge_server_ue_interface_ID);
     }
 
-    // Setup routing on pgw
+    // Setup pgw -> sgw routing
     Ptr<Node> pgw = nrEpcHelper->GetPgwNode();
     std::cout << "pgw node id: " << pgw->GetId() << std::endl;
     Ptr<Ipv4> pgwIpv4 = pgw->GetObject<Ipv4>();
     Ptr<Ipv4StaticRouting> pgwStaticRouting = ipv4RoutingHelper.GetStaticRouting(pgwIpv4);
     pgwStaticRouting->AddNetworkRouteTo(remoteIp, Ipv4Mask("255.255.255.0") , 3);
     
-    // Setup routing on sgw
+    // Setup sgw -> edge server routing
     Ptr<Node> sgw = nrEpcHelper->GetSgwNode();
     std::cout << "sgw node id: " << sgw->GetId() << std::endl;
     Ptr<Ipv4> sgwIpv4 = sgw->GetObject<Ipv4>();
