@@ -1,11 +1,11 @@
 {
-    "num_ues": 1,
+    "num_ues": 2,
     "smec_ue_indices": "",
     "video_detection_ue_indices": "",
     "transcoding_ue_indices": "",
     "video_sr_ue_indices": "",
     "file_transfer_ue_indices": "",
     "throughput_ue_indices": "",
-    "ping_ue_indices": "1",
+    "ping_ue_indices": "1,2",
     "max_cpus": 8
 }
