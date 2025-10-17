@@ -132,6 +132,13 @@ Ipv4L3Protocol::~Ipv4L3Protocol()
 }
 
 void
+Ipv4L3Protocol::SetPromiscuous(bool promiscuous)
+{
+    NS_LOG_FUNCTION(this << promiscuous);
+    m_promiscuous = promiscuous;
+}
+
+void
 Ipv4L3Protocol::Insert(Ptr<IpL4Protocol> protocol)
 {
     NS_LOG_FUNCTION(this << protocol);
@@ -390,10 +397,12 @@ Ipv4L3Protocol::AddInterface(Ptr<NetDevice> device)
 
     m_node->RegisterProtocolHandler(MakeCallback(&TrafficControlLayer::Receive, tc),
                                     Ipv4L3Protocol::PROT_NUMBER,
-                                    device);
+                                    device,
+                                    m_promiscuous);
     m_node->RegisterProtocolHandler(MakeCallback(&TrafficControlLayer::Receive, tc),
                                     ArpL3Protocol::PROT_NUMBER,
-                                    device);
+                                    device,
+                                    m_promiscuous);
 
     tc->RegisterProtocolHandler(MakeCallback(&Ipv4L3Protocol::Receive, this),
                                 Ipv4L3Protocol::PROT_NUMBER,

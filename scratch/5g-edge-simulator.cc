@@ -208,9 +208,13 @@ main(int argc, char* argv[])
 {
     LogComponentEnable("NrNoBackhaulEpcHelper", LOG_LEVEL_DEBUG);
     // LogComponentEnable("Ipv4", LOG_LEVEL_DEBUG);
-    LogComponentEnable("Ipv4StaticRouting", LOG_LEVEL_DEBUG);
-    // LogComponentEnable("Ipv4", LOG_LEVEL_DEBUG);
+    // LogComponentEnable("Ipv4StaticRouting", LOG_LEVEL_DEBUG);
+    // LogComponentEnable("Ipv4L3Protocol", LOG_LEVEL_DEBUG);
+    // LogComponentEnable("ArpL3Protocol", LOG_LEVEL_DEBUG);
     // LogComponentEnable("Packet", LOG_LEVEL_DEBUG);
+    // LogComponentEnable("Node", LOG_LEVEL_DEBUG);
+    // LogComponentEnable("Ipv4RawSocketImpl", LOG_LEVEL_DEBUG);
+    // LogComponentEnable("FdNetDevice", LOG_LEVEL_DEBUG);
     /*
      * Variables that represent the parameters we will accept as input by the
      * command line. Each of them is initialized with a default value, and
@@ -558,6 +562,14 @@ main(int argc, char* argv[])
     nrHelper->SetUeBwpManagerAlgorithmAttribute("NGBR_LOW_LAT_EMBB", UintegerValue(bwpIdForLowLat));
     nrHelper->SetUeBwpManagerAlgorithmAttribute("GBR_CONV_VOICE", UintegerValue(bwpIdForVoice));
 
+    // EmuFdNetDevice parameters
+    std::string emuMode("raw");
+    Ipv4Address remoteIp("10.10.1.2");
+    Ipv4Address localIp("10.10.1.11");  // Edge server will use .11
+    Ipv4Mask localMask("255.255.255.0");
+    std::string localGateway("10.10.1.1");  // Interface IP is the gateway
+    std::string deviceName("enp94s0f1np1");
+
     /*
      * We miss many other parameters. By default, not configuring them is equivalent
      * to use the default values. Please, have a look at the documentation to see
@@ -608,14 +620,9 @@ main(int argc, char* argv[])
         nrEpcHelper->SetupRemoteHost("25Gb/s", 2500, Seconds(0.000));
     std::cout << "Edge server created with IP: " << edge_server_Ipv4Address << std::endl;
 
-    // Function to setup a ethernet device in the edge_server to connect to the remote host
-    std::string emuMode("raw");
-    Ipv4Address remoteIp("10.10.1.2");
-    Ipv4Address localIp("10.10.1.11");  // Edge server will use .11
-    Ipv4Mask localMask("255.255.255.0");
-    std::string localGateway("10.10.1.1");  // Interface IP is the gateway
-    std::string deviceName("enp94s0f1np1");
+    ///////////////////////////  Set up UEs to connect to remote host /////////////////////////// 
 
+    // 1 . Set up the EmuFdNetDevice on the edge server to connect to the physical network interface
     FdNetDeviceHelper* helper = nullptr;
     auto raw = new EmuFdNetDeviceHelper;
     raw->SetDeviceName(deviceName);
@@ -630,14 +637,17 @@ main(int argc, char* argv[])
     // get the first device
     Ptr<NetDevice> device = devices.Get(0);
     device->SetAttribute("Address", Mac48AddressValue(Mac48Address::Allocate()));
+    std::cout << "Using ethernet device " << deviceName << " with MAC "
+              << device->GetAddress() << std::endl;
     GlobalValue::Bind("SimulatorImplementationType", StringValue("ns3::RealtimeSimulatorImpl"));
     GlobalValue::Bind("ChecksumEnabled", BooleanValue(true));
-    //
-    // Add a default internet stack to the node.  This gets us the ns-3 versions
-    // of ARP, IPv4, ICMP, UDP and TCP.
-    //
+ 
+
+    // 2. set up edge server IP and routing
     NS_LOG_INFO("Retrieve edge_server Internet Stack, IPv4 and routing");
     Ptr<Ipv4> edge_server_ipv4 = edge_server->GetObject<Ipv4>();
+    // enable the promiscuous mode to capture all packets (packets for UEs) for edge server ipv4
+    edge_server_ipv4->SetPromiscuous(true);
     uint32_t ethernet_interface_ID = edge_server_ipv4->AddInterface(device);
     uint32_t edge_server_ue_interface_ID = ethernet_interface_ID - 1; // last interface is the UE one
     std::cout << "Edge server interface ID: " << ethernet_interface_ID << std::endl;
@@ -652,18 +662,19 @@ main(int argc, char* argv[])
     edge_server_staticRouting->AddNetworkRouteTo(remoteIp, localMask, gateway, ethernet_interface_ID, 1);
     edge_server_ipv4->SetAttribute("IpForward", BooleanValue(true));
 
-    // set up UE
+    // 3. Initialize the Internet stack on the UEs
     InternetStackHelper internet;
 
     internet.Install(gridScenario.GetUserTerminals());
 
     Ipv4InterfaceContainer ueIpIface =
         nrEpcHelper->AssignUeIpv4Address(NetDeviceContainer(ueNetDev));
-
+    
     // attach UEs to the closest gNB
+    // UEs need to have IPv4/IPv6 installed before EPS bearers can be activated
     nrHelper->AttachToClosestGnb(ueNetDev, gnbNetDev);
     
-    // Setup path between UE and edge server
+    // 4. Setup path between UE and pgw, add remoteIp as default route on UEs
     Ipv4InterfaceContainer::Iterator i;
     for (i = ueIpIface.Begin (); i != ueIpIface.End (); ++i){
         std::pair<Ptr<Ipv4>, uint32_t> ueIpv4_pair = *i;
@@ -673,25 +684,21 @@ main(int argc, char* argv[])
         Ptr<Ipv4StaticRouting> ueStaticRouting = ipv4RoutingHelper.GetStaticRouting(ueIpv4);
         // setup UE -> PGW routing
         ueStaticRouting->SetDefaultRoute(remoteIp, ueInterface);
-        // setup  edge_server -> UE routing
-        Ipv4Address ueIpv4Address = ueIpv4->GetAddress(ueInterface, 0).GetLocal();
-        std::cout << "UE IP Address: " << ueIpv4Address << std::endl;
-        edge_server_staticRouting->AddNetworkRouteTo(ueIpv4Address, Ipv4Mask("255.255.255.0"), edge_server_ue_interface_ID);
     }
 
-    // Setup pgw -> sgw routing
+    // 5. Setup pgw -> sgw routing, add remoteIp to pgw routing tables
     Ptr<Node> pgw = nrEpcHelper->GetPgwNode();
     std::cout << "pgw node id: " << pgw->GetId() << std::endl;
     Ptr<Ipv4> pgwIpv4 = pgw->GetObject<Ipv4>();
     Ptr<Ipv4StaticRouting> pgwStaticRouting = ipv4RoutingHelper.GetStaticRouting(pgwIpv4);
-    pgwStaticRouting->AddNetworkRouteTo(remoteIp, Ipv4Mask("255.255.255.0") , 3);
+    pgwStaticRouting->AddNetworkRouteTo(remoteIp, Ipv4Mask("255.255.255.0") , nrEpcHelper->m_pgw_ipv4_if_index);
     
-    // Setup sgw -> edge server routing
+    // 6. Setup sgw -> edge server routing, add remoteIp to sgw routing tables
     Ptr<Node> sgw = nrEpcHelper->GetSgwNode();
     std::cout << "sgw node id: " << sgw->GetId() << std::endl;
     Ptr<Ipv4> sgwIpv4 = sgw->GetObject<Ipv4>();
     Ptr<Ipv4StaticRouting> sgwStaticRouting = ipv4RoutingHelper.GetStaticRouting(sgwIpv4);
-    sgwStaticRouting->AddNetworkRouteTo(remoteIp, Ipv4Mask("255.255.255.0") , 3);
+    sgwStaticRouting->AddNetworkRouteTo(remoteIp, Ipv4Mask("255.255.255.0") , nrEpcHelper->m_sgw_ipv4_if_index);
     
     /*
      * Traffic part. Install applications based on UE type:

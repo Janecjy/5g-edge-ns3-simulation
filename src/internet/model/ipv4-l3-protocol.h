@@ -122,6 +122,8 @@ class Ipv4L3Protocol : public Ipv4
     void Remove(Ptr<IpL4Protocol> protocol) override;
     void Remove(Ptr<IpL4Protocol> protocol, uint32_t interfaceIndex) override;
 
+    void SetPromiscuous(bool promiscuous) override;
+
     Ptr<IpL4Protocol> GetProtocol(int protocolNumber) const override;
     Ptr<IpL4Protocol> GetProtocol(int protocolNumber, int32_t interfaceIndex) const override;
 

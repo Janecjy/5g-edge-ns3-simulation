@@ -428,6 +428,16 @@ class Ipv4 : public Object
      */
     virtual void DeleteRawSocket(Ptr<Socket> socket) = 0;
 
+    
+    /**
+     * @brief Set or unset the Promiscuous mode for all interfaces
+     *
+     * @param promiscuous true to enable promiscuous mode, false to disable
+     */
+    virtual void SetPromiscuous(bool promiscuous) = 0;
+
+
+    bool m_promiscuous = false;  //!< Enable promiscuous mode for all interfaces
     static const uint32_t IF_ANY = 0xffffffff; //!< interface wildcard, meaning any interface
 
   private:
