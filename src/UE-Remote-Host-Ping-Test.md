@@ -1,3 +1,7 @@
+To run test
+./ns3 run --enable-sudo "5g-edge-simulator --configFile=config/ping_test.json"
+
+
 Run the following two commands to the 10.10.1.2
 // sudo ip neigh add
 // this add UE with IP 7.0.0.2 to the ArP cache on the remote host
