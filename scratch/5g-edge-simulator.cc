@@ -568,7 +568,7 @@ main(int argc, char* argv[])
     Ipv4Address localIp("10.10.1.11");  // Edge server will use .11
     Ipv4Mask localMask("255.255.255.0");
     std::string localGateway("10.10.1.1");  // Interface IP is the gateway
-    std::string deviceName("enp94s0f1np1");
+    std::string deviceName("enp129s0f0np0");
 
     /*
      * We miss many other parameters. By default, not configuring them is equivalent
