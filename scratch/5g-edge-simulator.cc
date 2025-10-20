@@ -714,60 +714,62 @@ main(int argc, char* argv[])
     /*
      * Install Throughput Test Applications (UDP Client/Server for max throughput)
      */
-    // if (ueThroughputContainer.GetN() > 0) {
-    //     std::cout << "Setting up throughput test applications..." << std::endl;
+    if (ueThroughputContainer.GetN() > 0) {
+        std::cout << "Setting up throughput test applications..." << std::endl;
         
-    //     // Throughput test uses UDP with high data rates
-    //     uint16_t dlPortThroughput = 9999;
-    //     uint16_t ulPortThroughput = 9998;
+        // Throughput test uses UDP with high data rates
+        uint16_t dlPortThroughput = 9999;
+        uint16_t ulPortThroughput = 9998;
 
-    //     // Downlink throughput test (remote host -> UE)
-    //     UdpServerHelper dlThroughputServer(dlPortThroughput);
-    //     ApplicationContainer dlThroughputServerApps = dlThroughputServer.Install(ueThroughputContainer);
-    //     allApps.Add(dlThroughputServerApps);
+        // Downlink throughput test (remote host -> UE)
+        UdpServerHelper dlThroughputServer(dlPortThroughput);
+        ApplicationContainer dlThroughputServerApps = dlThroughputServer.Install(ueThroughputContainer);
+        allApps.Add(dlThroughputServerApps);
 
-    //     UdpClientHelper dlThroughputClient;
-    //     dlThroughputClient.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
-    //     dlThroughputClient.SetAttribute("PacketSize", UintegerValue(throughputPacketSize));
-    //     dlThroughputClient.SetAttribute("Interval", 
-    //                                    TimeValue(Seconds(throughputPacketSize * 8.0 / throughputDataRate)));
+        // The dl client is implemented on the remote host
+        // UdpClientHelper dlThroughputClient;
+        // dlThroughputClient.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
+        // dlThroughputClient.SetAttribute("PacketSize", UintegerValue(throughputPacketSize));
+        // dlThroughputClient.SetAttribute("Interval", 
+        //                                TimeValue(Seconds(throughputPacketSize * 8.0 / throughputDataRate)));
 
-    //     // Uplink throughput test (UE -> remote host)
-    //     UdpServerHelper ulThroughputServer(ulPortThroughput);
-    //     ApplicationContainer ulThroughputServerApps = ulThroughputServer.Install(edge_server);
-    //     allApps.Add(ulThroughputServerApps);
+        // Uplink throughput test (UE -> remote host)
+        // The ul server is implemented on the remote host
+        // UdpServerHelper ulThroughputServer(ulPortThroughput);
+        // ApplicationContainer ulThroughputServerApps = ulThroughputServer.Install(edge_server);
+        // allApps.Add(ulThroughputServerApps);
 
-    //     UdpClientHelper ulThroughputClient;
-    //     ulThroughputClient.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
-    //     ulThroughputClient.SetAttribute("PacketSize", UintegerValue(throughputPacketSize));
-    //     ulThroughputClient.SetAttribute("Interval", 
-    //                                    TimeValue(Seconds(throughputPacketSize * 8.0 / throughputDataRate)));
+        UdpClientHelper ulThroughputClient;
+        ulThroughputClient.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
+        ulThroughputClient.SetAttribute("PacketSize", UintegerValue(throughputPacketSize));
+        ulThroughputClient.SetAttribute("Interval", 
+                                       TimeValue(Seconds(throughputPacketSize * 8.0 / throughputDataRate)));
 
-    //     // Install clients for each throughput UE
-    //     for (uint32_t i = 0; i < ueThroughputContainer.GetN(); ++i) {
-    //         // Find the UE index in the full UE list
-    //         Ptr<Node> throughputUE = ueThroughputContainer.Get(i);
-    //         uint32_t ueIdx = 0;
-    //         for (uint32_t j = 0; j < gridScenario.GetUserTerminals().GetN(); ++j) {
-    //             if (gridScenario.GetUserTerminals().Get(j) == throughputUE) {
-    //                 ueIdx = j;
-    //                 break;
-    //             }
-    //         }
+        // Install clients for each throughput UE
+        for (uint32_t i = 0; i < ueThroughputContainer.GetN(); ++i) {
+            // Find the UE index in the full UE list
+            Ptr<Node> throughputUE = ueThroughputContainer.Get(i);
+            uint32_t ueIdx = 0;
+            for (uint32_t j = 0; j < gridScenario.GetUserTerminals().GetN(); ++j) {
+                if (gridScenario.GetUserTerminals().Get(j) == throughputUE) {
+                    ueIdx = j;
+                    break;
+                }
+            }
             
-    //         Address ueAddress = ueIpIface.GetAddress(ueIdx);
+            Address ueAddress = ueIpIface.GetAddress(ueIdx);
 
-    //         // Downlink client (remote host sends to UE)
-    //         dlThroughputClient.SetAttribute("Remote", 
-    //             AddressValue(addressUtils::ConvertToSocketAddress(ueAddress, dlPortThroughput)));
-    //         allApps.Add(dlThroughputClient.Install(edge_server));
+            // // Downlink client (remote host sends to UE)
+            // dlThroughputClient.SetAttribute("Remote", 
+            //     AddressValue(addressUtils::ConvertToSocketAddress(ueAddress, dlPortThroughput)));
+            // allApps.Add(dlThroughputClient.Install(edge_server));
 
-    //         // Uplink client (UE sends to remote host)
-    //         ulThroughputClient.SetAttribute("Remote", 
-    //             AddressValue(addressUtils::ConvertToSocketAddress(edge_server_Ipv4Address, ulPortThroughput)));
-    //         allApps.Add(ulThroughputClient.Install(throughputUE));
-    //     }
-    // }
+            // Uplink client (UE sends to remote host)
+            ulThroughputClient.SetAttribute("Remote", 
+                AddressValue(addressUtils::ConvertToSocketAddress(remoteIp, ulPortThroughput)));
+            allApps.Add(ulThroughputClient.Install(throughputUE));
+        }
+    }
 
     /*
      * Install Ping Applications (default for unassigned UEs)
