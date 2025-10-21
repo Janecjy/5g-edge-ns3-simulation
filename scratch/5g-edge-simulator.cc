@@ -195,6 +195,39 @@ void PingRttCallback(uint16_t nodeId, Time rtt)
 //     NS_LOG_UNCOND("Received " << seqNo << " Response with RTT = " << rtt);
 // }
 
+// ---- periodic throughput logger ----
+static double   kIntervalSec = 0.5;   // sampling interval
+static uint64_t lastRxBytes  = 0;
+
+static void
+LogDlThroughput(Ptr<Application> app)
+{
+  Ptr<PacketSink> sink = app->GetObject<PacketSink>();
+  uint64_t cur = sink->GetTotalRx();                 // bytes since start
+  uint64_t delta = cur - lastRxBytes;                // bytes in last interval
+  lastRxBytes = cur;
+
+  double mbps = (delta * 8.0) / (1e6 * kIntervalSec);
+  std::cout << Simulator::Now().GetSeconds()
+            << "s  UE DL throughput: " << mbps << " Mb/s  (totalRx=" << cur << " B)\n";
+
+  Simulator::Schedule(Seconds(kIntervalSec), &LogDlThroughput, app);
+}
+
+void AttachDlSinkAndSampler(Ptr<Node> ue, uint16_t port,
+                            double start=0.0, double stop=10.0, double interval=0.5)
+{
+  kIntervalSec = interval;
+  Address any = InetSocketAddress(Ipv4Address::GetAny(), port);
+  PacketSinkHelper sinkHelper("ns3::UdpSocketFactory", any);     // also works with Tcp if you swap factory
+  auto apps = sinkHelper.Install(ue);
+  apps.Start(Seconds(start));
+  apps.Stop(Seconds(stop));
+
+  lastRxBytes = 0;
+  Simulator::Schedule(Seconds(start + interval), &LogDlThroughput, apps.Get(0));
+}
+
 
 /*
  * With this line, we will be able to see the logs of the file by enabling the
@@ -206,7 +239,8 @@ NS_LOG_COMPONENT_DEFINE("CttcNrDemo");
 int
 main(int argc, char* argv[])
 {
-    LogComponentEnable("NrNoBackhaulEpcHelper", LOG_LEVEL_DEBUG);
+    // LogComponentEnable("UdpServer", LOG_LEVEL_DEBUG);
+    // LogComponentEnable("NrNoBackhaulEpcHelper", LOG_LEVEL_DEBUG);
     // LogComponentEnable("Ipv4", LOG_LEVEL_DEBUG);
     // LogComponentEnable("Ipv4StaticRouting", LOG_LEVEL_DEBUG);
     // LogComponentEnable("Ipv4L3Protocol", LOG_LEVEL_DEBUG);
@@ -237,7 +271,7 @@ main(int argc, char* argv[])
 
     // Simulation parameters. Please don't use double to indicate seconds; use
     // ns-3 Time values which use integers to avoid portability issues.
-    Time simTime = MilliSeconds(23000);  // 5 seconds default for faster testing
+    Time simTime = MilliSeconds(2000);  // 5 seconds default for faster testing
     Time udpAppStartTime = MilliSeconds(400);
 
     // NR parameters configured for Band 78 (3.5 GHz) testbed
@@ -721,54 +755,126 @@ main(int argc, char* argv[])
         uint16_t dlPortThroughput = 9999;
         uint16_t ulPortThroughput = 9998;
 
-        // Downlink throughput test (remote host -> UE)
-        UdpServerHelper dlThroughputServer(dlPortThroughput);
-        ApplicationContainer dlThroughputServerApps = dlThroughputServer.Install(ueThroughputContainer);
-        allApps.Add(dlThroughputServerApps);
-
-        // The dl client is implemented on the remote host
-        // UdpClientHelper dlThroughputClient;
-        // dlThroughputClient.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
-        // dlThroughputClient.SetAttribute("PacketSize", UintegerValue(throughputPacketSize));
-        // dlThroughputClient.SetAttribute("Interval", 
-        //                                TimeValue(Seconds(throughputPacketSize * 8.0 / throughputDataRate)));
-
-        // Uplink throughput test (UE -> remote host)
-        // The ul server is implemented on the remote host
-        // UdpServerHelper ulThroughputServer(ulPortThroughput);
-        // ApplicationContainer ulThroughputServerApps = ulThroughputServer.Install(edge_server);
-        // allApps.Add(ulThroughputServerApps);
-
         UdpClientHelper ulThroughputClient;
         ulThroughputClient.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
         ulThroughputClient.SetAttribute("PacketSize", UintegerValue(throughputPacketSize));
         ulThroughputClient.SetAttribute("Interval", 
+                                    TimeValue(Seconds(throughputPacketSize * 8.0 / throughputDataRate)));
+        
+        UdpClientHelper dlThroughputClient;
+        dlThroughputClient.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
+        dlThroughputClient.SetAttribute("PacketSize", UintegerValue(throughputPacketSize));
+        dlThroughputClient.SetAttribute("Interval", 
                                        TimeValue(Seconds(throughputPacketSize * 8.0 / throughputDataRate)));
+        std::cout << "Interval set to " 
+                  << (throughputPacketSize * 8.0 / throughputDataRate) << " seconds" << std::endl;
 
-        // Install clients for each throughput UE
-        for (uint32_t i = 0; i < ueThroughputContainer.GetN(); ++i) {
-            // Find the UE index in the full UE list
-            Ptr<Node> throughputUE = ueThroughputContainer.Get(i);
-            uint32_t ueIdx = 0;
-            for (uint32_t j = 0; j < gridScenario.GetUserTerminals().GetN(); ++j) {
-                if (gridScenario.GetUserTerminals().Get(j) == throughputUE) {
-                    ueIdx = j;
-                    break;
+        if(useExternalServer) {
+            // setup downlink
+            // udp-client on external server
+            // udp-server is replaced with packet sink on ue
+            for (uint32_t i = 0; i < ueThroughputContainer.GetN(); ++i) {
+                // Find the UE index in the full UE list
+                Ptr<Node> throughputUE = ueThroughputContainer.Get(i);
+                AttachDlSinkAndSampler(throughputUE, dlPortThroughput, /*start*/udpAppStartTime.GetSeconds(), /*stop*/simTime.GetSeconds(), /*interval*/0.5);
+            }            
+
+            // setup uplink
+            for (uint32_t i = 0; i < ueThroughputContainer.GetN(); ++i) {
+                Ptr<Node> throughputUE = ueThroughputContainer.Get(i);
+                ulThroughputClient.SetAttribute("Remote", 
+                    AddressValue(addressUtils::ConvertToSocketAddress(remoteIp, ulPortThroughput)));
+                allApps.Add(ulThroughputClient.Install(throughputUE));
+            }
+        }else{
+            // setup downlink
+            // udp client on edge server
+            // udp server is replaced with packet sink on ue
+            for (uint32_t i = 0; i < ueThroughputContainer.GetN(); ++i) {
+                // Find the UE index in the full UE list
+                Ptr<Node> throughputUE = ueThroughputContainer.Get(i);
+                uint32_t ueIdx = 0;
+                for (uint32_t j = 0; j < gridScenario.GetUserTerminals().GetN(); ++j) {
+                    if (gridScenario.GetUserTerminals().Get(j) == throughputUE) {
+                        ueIdx = j;
+                        break;
+                    }
                 }
+                Address ueAddress = ueIpIface.GetAddress(ueIdx);
+                // Downlink packet sink on ue
+                AttachDlSinkAndSampler(throughputUE, dlPortThroughput, /*start*/udpAppStartTime.GetSeconds(), /*stop*/simTime.GetSeconds(), /*interval*/0.5);
+                // Downlink packet generator on edge server
+                dlThroughputClient.SetAttribute("Remote", 
+                    AddressValue(addressUtils::ConvertToSocketAddress(ueAddress, dlPortThroughput)));
+                allApps.Add(dlThroughputClient.Install(edge_server));
             }
             
-            Address ueAddress = ueIpIface.GetAddress(ueIdx);
+            // setup uplink
+            // Uplink packet generator on ue
+            for (uint32_t i = 0; i < ueThroughputContainer.GetN(); ++i) {
+                Ptr<Node> throughputUE = ueThroughputContainer.Get(i);
+                ulThroughputClient.SetAttribute("Remote", 
+                    AddressValue(addressUtils::ConvertToSocketAddress(edge_server_Ipv4Address, ulPortThroughput)));
+                allApps.Add(ulThroughputClient.Install(throughputUE));
+            }
+            // Uplink packet sink on edge server
+            UdpServerHelper ulThroughputServer(ulPortThroughput);
+            ApplicationContainer ulThroughputServerApps = ulThroughputServer.Install(edge_server);
+            allApps.Add(ulThroughputServerApps);
+            // AttachDlSinkAndSampler(edge_server, ulPortThroughput, /*start*/udpAppStartTime.GetSeconds(), /*stop*/simTime.GetSeconds(), /*interval*/0.5);
 
-            // // Downlink client (remote host sends to UE)
-            // dlThroughputClient.SetAttribute("Remote", 
-            //     AddressValue(addressUtils::ConvertToSocketAddress(ueAddress, dlPortThroughput)));
-            // allApps.Add(dlThroughputClient.Install(edge_server));
-
-            // Uplink client (UE sends to remote host)
-            ulThroughputClient.SetAttribute("Remote", 
-                AddressValue(addressUtils::ConvertToSocketAddress(remoteIp, ulPortThroughput)));
-            allApps.Add(ulThroughputClient.Install(throughputUE));
         }
+
+        // Downlink throughput test (remote host -> UE)
+        // UdpServerHelper dlThroughputServer(dlPortThroughput);
+        // ApplicationContainer dlThroughputServerApps = dlThroughputServer.Install(ueThroughputContainer);
+        // allApps.Add(dlThroughputServerApps);
+
+        // The dl client is implemented on the remote host
+    //     UdpClientHelper dlThroughputClient;
+    //     dlThroughputClient.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
+    //     dlThroughputClient.SetAttribute("PacketSize", UintegerValue(throughputPacketSize));
+    //     dlThroughputClient.SetAttribute("Interval", 
+    //                                    TimeValue(Seconds(throughputPacketSize * 8.0 / throughputDataRate)));
+
+    //     // Uplink throughput test (UE -> remote host)
+    //     // The ul server is implemented on the remote host
+    //     // UdpServerHelper ulThroughputServer(ulPortThroughput);
+    //     // ApplicationContainer ulThroughputServerApps = ulThroughputServer.Install(edge_server);
+    //     // allApps.Add(ulThroughputServerApps);
+
+    //     // UdpClientHelper ulThroughputClient;
+    //     // ulThroughputClient.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
+    //     // ulThroughputClient.SetAttribute("PacketSize", UintegerValue(throughputPacketSize));
+    //     // ulThroughputClient.SetAttribute("Interval", 
+    //                                 //    TimeValue(Seconds(throughputPacketSize * 8.0 / throughputDataRate)));
+
+    //     // Install clients for each throughput UE
+    //     for (uint32_t i = 0; i < ueThroughputContainer.GetN(); ++i) {
+    //         // Find the UE index in the full UE list
+    //         Ptr<Node> throughputUE = ueThroughputContainer.Get(i);
+    //         uint32_t ueIdx = 0;
+    //         for (uint32_t j = 0; j < gridScenario.GetUserTerminals().GetN(); ++j) {
+    //             if (gridScenario.GetUserTerminals().Get(j) == throughputUE) {
+    //                 ueIdx = j;
+    //                 break;
+    //             }
+    //         }
+            
+    //         Address ueAddress = ueIpIface.GetAddress(ueIdx);
+
+
+    //         AttachDlSinkAndSampler(throughputUE, dlPortThroughput, /*start*/udpAppStartTime.GetSeconds(), /*stop*/simTime.GetSeconds(), /*interval*/0.5);
+    //         // Downlink client (remote host sends to UE)
+    //         dlThroughputClient.SetAttribute("Remote", 
+    //             AddressValue(addressUtils::ConvertToSocketAddress(ueAddress, dlPortThroughput)));
+    //         allApps.Add(dlThroughputClient.Install(edge_server));
+
+    //         // Uplink client (UE sends to remote host)
+    //         // ulThroughputClient.SetAttribute("Remote", 
+    //         //     AddressValue(addressUtils::ConvertToSocketAddress(remoteIp, ulPortThroughput)));
+    //         // allApps.Add(ulThroughputClient.Install(throughputUE));
+    //     }
     }
 
     /*
@@ -917,6 +1023,8 @@ main(int argc, char* argv[])
         monitor->CheckForLostPackets();
         Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmonHelper.GetClassifier());
         FlowMonitor::FlowStatsContainer stats = monitor->GetFlowStats();
+
+        std::cout<<"flow stats is " << stats.size() <<std::endl;
 
         outFile << std::endl << "=== Throughput Test Results ===" << std::endl;
         outFile << "Test Duration: " << (simTime - udpAppStartTime).GetSeconds() << " seconds" << std::endl;
